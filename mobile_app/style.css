@@ -1,0 +1,439 @@
+/* VR Screen Viewer - Mobile Web App Styles */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --primary-color: #4CAF50;
+    --primary-dark: #388E3C;
+    --secondary-color: #2196F3;
+    --background: #1a1a2e;
+    --surface: #16213e;
+    --text-primary: #ffffff;
+    --text-secondary: #b0b0b0;
+    --error: #f44336;
+    --warning: #ff9800;
+}
+
+html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--background);
+    color: var(--text-primary);
+    overflow: hidden;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* Screen Management */
+.screen {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+}
+
+.screen.active {
+    display: flex;
+}
+
+/* Connection Screen */
+#connection-screen {
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--background) 0%, var(--surface) 100%);
+}
+
+.container {
+    width: 100%;
+    max-width: 400px;
+    padding: 20px;
+    text-align: center;
+}
+
+h1 {
+    font-size: 2em;
+    margin-bottom: 10px;
+    color: var(--primary-color);
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    margin-bottom: 30px;
+}
+
+.input-group {
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.input-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+
+.input-group input {
+    width: 100%;
+    padding: 15px;
+    font-size: 1.1em;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.3s;
+}
+
+.input-group input:focus {
+    border-color: var(--primary-color);
+}
+
+/* Buttons */
+.primary-btn {
+    width: 100%;
+    padding: 18px 30px;
+    font-size: 1.2em;
+    font-weight: bold;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.primary-btn:hover, .primary-btn:active {
+    background: var(--primary-dark);
+    transform: scale(0.98);
+}
+
+.primary-btn:disabled {
+    background: #666;
+    cursor: not-allowed;
+}
+
+.secondary-btn {
+    padding: 12px 20px;
+    font-size: 1em;
+    background: transparent;
+    color: var(--secondary-color);
+    border: 2px solid var(--secondary-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.secondary-btn:hover, .secondary-btn:active {
+    background: var(--secondary-color);
+    color: white;
+}
+
+.btn-icon {
+    font-size: 1.2em;
+}
+
+/* Status Messages */
+.status {
+    margin-top: 20px;
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 0.9em;
+}
+
+.status.error {
+    background: rgba(244, 67, 54, 0.2);
+    color: var(--error);
+}
+
+.status.success {
+    background: rgba(76, 175, 80, 0.2);
+    color: var(--primary-color);
+}
+
+.status.connecting {
+    background: rgba(255, 152, 0, 0.2);
+    color: var(--warning);
+}
+
+/* Recent Connections */
+.recent-connections {
+    margin-top: 30px;
+    text-align: left;
+}
+
+.recent-connections h3 {
+    font-size: 0.9em;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+
+#recent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.recent-item {
+    padding: 10px 15px;
+    background: var(--surface);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.recent-item:hover, .recent-item:active {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* Settings Screen */
+#settings-screen {
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding-top: 20px;
+}
+
+#settings-screen .container {
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.settings-group {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.settings-group h3 {
+    font-size: 0.9em;
+    color: var(--text-secondary);
+    margin-bottom: 15px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.setting-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.setting-item:last-child {
+    border-bottom: none;
+}
+
+.setting-item label {
+    color: var(--text-primary);
+}
+
+.setting-item select,
+.setting-item input[type="range"] {
+    min-width: 120px;
+    padding: 8px;
+    background: var(--background);
+    color: var(--text-primary);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+}
+
+.setting-item input[type="checkbox"] {
+    width: 24px;
+    height: 24px;
+    accent-color: var(--primary-color);
+}
+
+/* Viewer Screen */
+#viewer-screen {
+    background: #000;
+    display: none;
+}
+
+#viewer-screen.active {
+    display: block;
+}
+
+#vr-canvas {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: optimizeSpeed;
+    image-rendering: -webkit-optimize-contrast;
+}
+
+/* Overlays */
+.overlay {
+    position: fixed;
+    z-index: 100;
+}
+
+/* Stats Overlay */
+#stats-overlay {
+    top: 10px;
+    left: 10px;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 10px 15px;
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+}
+
+#stats-overlay .stat {
+    margin: 3px 0;
+}
+
+#stats-overlay .stat span {
+    color: var(--primary-color);
+}
+
+/* Controls Overlay */
+#controls-overlay {
+    top: 10px;
+    right: 10px;
+    display: flex;
+    gap: 10px;
+}
+
+.control-btn {
+    width: 50px;
+    height: 50px;
+    font-size: 1.5em;
+    background: rgba(0, 0, 0, 0.7);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.control-btn:hover, .control-btn:active {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+/* Connection Lost Overlay */
+.connection-lost {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.connection-lost .message {
+    text-align: center;
+    padding: 30px;
+}
+
+.connection-lost h2 {
+    color: var(--warning);
+    margin-bottom: 15px;
+}
+
+.connection-lost p {
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}
+
+.connection-lost .primary-btn {
+    max-width: 200px;
+    margin: 0 auto;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Responsive */
+@media (orientation: landscape) {
+    #connection-screen .container {
+        max-width: 600px;
+    }
+    
+    .input-group {
+        display: inline-block;
+        width: 48%;
+        margin-right: 2%;
+    }
+    
+    #stats-overlay {
+        font-size: 10px;
+        padding: 8px 10px;
+    }
+    
+    .control-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 1.2em;
+    }
+}
+
+/* Fullscreen specific */
+:fullscreen #controls-overlay,
+:-webkit-full-screen #controls-overlay {
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+:fullscreen #viewer-screen:hover #controls-overlay,
+:-webkit-full-screen #viewer-screen:hover #controls-overlay {
+    opacity: 1;
+}
+
+/* VR-specific optimizations */
+@media (max-width: 100vh) {
+    /* Phone in landscape for VR */
+    #stats-overlay {
+        font-size: 8px;
+        padding: 5px 8px;
+    }
+}
+
+/* Touch feedback */
+button:active {
+    opacity: 0.8;
+}
+
+/* Animations */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.connecting {
+    animation: pulse 1.5s infinite;
+}
+
+/* Dark mode scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--surface);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}

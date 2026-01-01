@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    
+    <title>VR Screen Viewer</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Prevent phone from sleeping -->
+    <script>
+        if ('wakeLock' in navigator) {
+            navigator.wakeLock.request('screen').catch(e => console.log('Wake Lock error:', e));
+        }
+    </script>
+</head>
+<body>
+    <!-- Connection Screen -->
+    <div id="connection-screen" class="screen active">
+        <div class="container">
+            <h1>🎮 VR Screen Viewer</h1>
+            <p class="subtitle">Connect to your PC to start streaming</p>
+            
+            <div class="input-group">
+                <label for="server-ip">PC IP Address</label>
+                <input type="text" id="server-ip" placeholder="192.168.1.100" autocomplete="off">
+            </div>
+            
+            <div class="input-group">
+                <label for="server-port">WebSocket Port</label>
+                <input type="number" id="server-port" value="8765" min="1024" max="65535">
+            </div>
+            
+            <button id="connect-btn" class="primary-btn">
+                <span class="btn-icon">📡</span>
+                Connect
+            </button>
+            
+            <div id="connection-status" class="status"></div>
+            
+            <div class="recent-connections" id="recent-connections">
+                <h3>Recent Connections</h3>
+                <div id="recent-list"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Settings Screen -->
+    <div id="settings-screen" class="screen">
+        <div class="container">
+            <h2>⚙️ Settings</h2>
+            
+            <div class="settings-group">
+                <h3>Display</h3>
+                
+                <div class="setting-item">
+                    <label>VR Mode</label>
+                    <select id="vr-mode">
+                        <option value="sbs">Side by Side</option>
+                        <option value="mono">Mono (Single View)</option>
+                    </select>
+                </div>
+                
+                <div class="setting-item">
+                    <label>Fullscreen</label>
+                    <button id="fullscreen-btn" class="secondary-btn">Enter Fullscreen</button>
+                </div>
+                
+                <div class="setting-item">
+                    <label>Screen Orientation</label>
+                    <button id="orientation-btn" class="secondary-btn">Lock Landscape</button>
+                </div>
+            </div>
+            
+            <div class="settings-group">
+                <h3>Quality</h3>
+                
+                <div class="setting-item">
+                    <label>Quality Preset</label>
+                    <select id="quality-preset">
+                        <option value="auto">Auto (Adaptive)</option>
+                        <option value="ultra_low_latency">Ultra Low Latency</option>
+                        <option value="low_latency">Low Latency</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="quality">High Quality</option>
+                    </select>
+                </div>
+                
+                <div class="setting-item">
+                    <label>Max Buffer Frames</label>
+                    <input type="range" id="buffer-frames" min="0" max="3" value="1">
+                    <span id="buffer-value">1</span>
+                </div>
+            </div>
+            
+            <div class="settings-group">
+                <h3>Performance</h3>
+                
+                <div class="setting-item">
+                    <label>Show Stats</label>
+                    <input type="checkbox" id="show-stats" checked>
+                </div>
+                
+                <div class="setting-item">
+                    <label>Hardware Decode</label>
+                    <input type="checkbox" id="hardware-decode" checked>
+                </div>
+            </div>
+            
+            <button id="back-to-connection" class="secondary-btn">
+                ← Back to Connection
+            </button>
+        </div>
+    </div>
+    
+    <!-- Viewer Screen -->
+    <div id="viewer-screen" class="screen">
+        <canvas id="vr-canvas"></canvas>
+        
+        <!-- Stats Overlay -->
+        <div id="stats-overlay" class="overlay">
+            <div class="stat">FPS: <span id="stat-fps">0</span></div>
+            <div class="stat">Latency: <span id="stat-latency">0</span>ms</div>
+            <div class="stat">Size: <span id="stat-size">0</span>KB</div>
+            <div class="stat">Frames: <span id="stat-frames">0</span></div>
+        </div>
+        
+        <!-- Controls Overlay -->
+        <div id="controls-overlay" class="overlay controls">
+            <button id="disconnect-btn" class="control-btn">❌</button>
+            <button id="settings-btn" class="control-btn">⚙️</button>
+            <button id="fullscreen-viewer-btn" class="control-btn">📺</button>
+        </div>
+        
+        <!-- Connection Lost Overlay -->
+        <div id="connection-lost" class="overlay connection-lost hidden">
+            <div class="message">
+                <h2>⚠️ Connection Lost</h2>
+                <p>Attempting to reconnect...</p>
+                <button id="reconnect-btn" class="primary-btn">Reconnect Now</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
