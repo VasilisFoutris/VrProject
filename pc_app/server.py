@@ -253,22 +253,43 @@ class StreamingServer:
         print(f"[Server] Starting on ws://{self.config.host}:{self.config.port}")
         print(f"[Server] Clients can connect to: {self.get_connection_url()}")
         
-        async with websockets.serve(
+        self._server = await websockets.serve(
             self._handle_client,
             self.config.host,
             self.config.port,
             max_size=10 * 1024 * 1024,  # 10MB max message
             ping_interval=None,  # We handle our own pings
             ping_timeout=None,
-        ) as server:
-            self._server = server
-            self._running = True
-            
+        )
+        self._running = True
+        
+        try:
             # Run frame broadcaster and ping tasks
-            await asyncio.gather(
-                self._broadcast_frames(),
-                self._ping_clients(),
-            )
+            broadcast_task = asyncio.create_task(self._broadcast_frames())
+            ping_task = asyncio.create_task(self._ping_clients())
+            
+            # Wait for stop signal
+            while self._running:
+                await asyncio.sleep(0.1)
+            
+            # Cancel tasks gracefully
+            broadcast_task.cancel()
+            ping_task.cancel()
+            
+            try:
+                await broadcast_task
+            except asyncio.CancelledError:
+                pass
+            
+            try:
+                await ping_task
+            except asyncio.CancelledError:
+                pass
+                
+        finally:
+            # Close server gracefully
+            self._server.close()
+            await self._server.wait_closed()
     
     def push_frame(self, frame_data: bytes):
         """Push a new frame to be broadcast to clients"""
@@ -281,24 +302,41 @@ class StreamingServer:
     
     def start(self):
         """Start the server in a background thread"""
+        self._stop_event = threading.Event()
+        
         def run():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
             try:
                 self._loop.run_until_complete(self._run_server())
             except Exception as e:
-                print(f"[Server] Error: {e}")
+                if self._running:  # Only print if not intentional shutdown
+                    print(f"[Server] Error: {e}")
             finally:
-                self._loop.close()
+                # Clean up pending tasks
+                try:
+                    pending = asyncio.all_tasks(self._loop)
+                    for task in pending:
+                        task.cancel()
+                    # Allow cancelled tasks to complete
+                    if pending:
+                        self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
+                finally:
+                    self._loop.close()
+                    self._stop_event.set()
         
         self._server_thread = threading.Thread(target=run, daemon=True)
         self._server_thread.start()
     
     def stop(self):
-        """Stop the server"""
+        """Stop the server gracefully"""
         self._running = False
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        
+        # Give the server loop time to notice _running = False and shutdown gracefully
+        if hasattr(self, '_stop_event'):
+            self._stop_event.wait(timeout=2.0)
     
     def get_stats(self) -> StreamStats:
         """Get current streaming statistics"""
@@ -317,6 +355,9 @@ class HTTPServer:
         self.port = port
         self.web_root = web_root
         self._running = False
+        self._server = None
+        self._loop = None
+        self._stop_event = None
     
     async def handle_request(self, reader, writer):
         """Handle HTTP request"""
@@ -373,26 +414,46 @@ class HTTPServer:
     
     async def run(self):
         """Run the HTTP server"""
-        server = await asyncio.start_server(
+        self._server = await asyncio.start_server(
             self.handle_request,
             '0.0.0.0',
             self.port
         )
+        self._running = True
         
         print(f"[HTTP] Serving web app on http://0.0.0.0:{self.port}")
         
-        async with server:
-            await server.serve_forever()
+        try:
+            while self._running:
+                await asyncio.sleep(0.1)
+        finally:
+            self._server.close()
+            await self._server.wait_closed()
     
     def start(self):
         """Start HTTP server in background thread"""
+        self._stop_event = threading.Event()
+        
         def run():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
             try:
-                loop.run_until_complete(self.run())
+                self._loop.run_until_complete(self.run())
             except Exception as e:
-                print(f"[HTTP] Error: {e}")
+                if self._running:
+                    print(f"[HTTP] Error: {e}")
+            finally:
+                self._loop.close()
+                self._stop_event.set()
+        
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+    
+    def stop(self):
+        """Stop the HTTP server"""
+        self._running = False
+        if self._stop_event:
+            self._stop_event.wait(timeout=2.0)
         
         thread = threading.Thread(target=run, daemon=True)
         thread.start()

@@ -9,6 +9,26 @@ from typing import Tuple, Optional
 import time
 from config import EncoderConfig, Config
 
+# Try to import turbojpeg for faster encoding
+# Requires both PyTurboJPEG package AND libturbojpeg native library
+HAS_TURBOJPEG = False
+jpeg_encoder = None
+try:
+    from turbojpeg import TurboJPEG, TJPF_BGR
+    jpeg_encoder = TurboJPEG()
+    HAS_TURBOJPEG = True
+    print("TurboJPEG enabled - using fast encoding")
+except ImportError:
+    print("TurboJPEG not installed - using OpenCV (pip install PyTurboJPEG)")
+except RuntimeError as e:
+    # This happens when PyTurboJPEG is installed but native library is missing
+    print(f"TurboJPEG native library not found - using OpenCV")
+    print("For faster encoding, install libturbojpeg:")
+    print("  Windows: Download from https://github.com/libjpeg-turbo/libjpeg-turbo/releases")
+    print("  Linux: sudo apt install libturbojpeg")
+except Exception as e:
+    print(f"TurboJPEG error: {e} - using OpenCV")
+
 
 class VREncoder:
     """Encodes frames for VR streaming with stereo split and compression"""
@@ -19,23 +39,28 @@ class VREncoder:
         self.encode_time_total: float = 0.0
         self.last_encode_time: float = 0.0
         
-        # JPEG encoding parameters
+        # JPEG encoding parameters - optimized for speed
         self.jpeg_params = [
             cv2.IMWRITE_JPEG_QUALITY, config.jpeg_quality,
-            cv2.IMWRITE_JPEG_OPTIMIZE, 1,
+            cv2.IMWRITE_JPEG_OPTIMIZE, 0,  # Disable optimization for speed
+            cv2.IMWRITE_JPEG_RST_INTERVAL, 0,  # No restart markers
         ]
         
         # WebP encoding parameters
         self.webp_params = [
             cv2.IMWRITE_WEBP_QUALITY, config.jpeg_quality,
         ]
+        
+        # Pre-allocate buffer for encoding
+        self._encode_buffer = None
     
     def update_config(self, config: EncoderConfig):
         """Update encoder configuration"""
         self.config = config
         self.jpeg_params = [
             cv2.IMWRITE_JPEG_QUALITY, config.jpeg_quality,
-            cv2.IMWRITE_JPEG_OPTIMIZE, 1,
+            cv2.IMWRITE_JPEG_OPTIMIZE, 0,  # Disable optimization for speed
+            cv2.IMWRITE_JPEG_RST_INTERVAL, 0,
         ]
         self.webp_params = [
             cv2.IMWRITE_WEBP_QUALITY, config.jpeg_quality,
@@ -44,59 +69,53 @@ class VREncoder:
     def create_stereo_frame(self, frame: np.ndarray) -> np.ndarray:
         """
         Create a side-by-side stereo frame for VR.
-        Applies slight horizontal offset for each eye to create depth.
+        Optimized version - output is same width as input, so no net size change.
         """
         height, width = frame.shape[:2]
+        half_width = width // 2
         
         # Calculate eye separation in pixels
         separation = int(width * self.config.eye_separation)
         
-        # Create left and right eye views with horizontal offset
-        # Left eye gets content shifted slightly right
-        # Right eye gets content shifted slightly left
+        if separation == 0:
+            # No separation - fastest path: resize once and copy to both sides
+            resized = cv2.resize(frame, (half_width, height), interpolation=cv2.INTER_NEAREST)
+            # Create output array and fill both halves
+            stereo = np.empty((height, width, 3), dtype=np.uint8)
+            stereo[:, :half_width] = resized
+            stereo[:, half_width:] = resized
+            return stereo
         
-        left_eye = np.zeros_like(frame)
-        right_eye = np.zeros_like(frame)
+        # With separation: use array slicing - crop then resize
+        # Left eye: shift image right (crop from left side)
+        left_end = width - separation
+        left_scaled = cv2.resize(frame[:, :left_end], (half_width, height), interpolation=cv2.INTER_NEAREST)
         
-        if separation > 0:
-            # Left eye: shift image right (view from left)
-            left_eye[:, separation:] = frame[:, :width - separation]
-            left_eye[:, :separation] = frame[:, :separation]  # Fill edge
-            
-            # Right eye: shift image left (view from right)
-            right_eye[:, :width - separation] = frame[:, separation:]
-            right_eye[:, width - separation:] = frame[:, width - separation:]  # Fill edge
-        else:
-            # No separation, just duplicate
-            left_eye = frame.copy()
-            right_eye = frame.copy()
+        # Right eye: shift image left (crop from right side)  
+        right_scaled = cv2.resize(frame[:, separation:], (half_width, height), interpolation=cv2.INTER_NEAREST)
         
-        # Scale each eye to half width
-        half_width = width // 2
-        left_scaled = cv2.resize(left_eye, (half_width, height), interpolation=cv2.INTER_LINEAR)
-        right_scaled = cv2.resize(right_eye, (half_width, height), interpolation=cv2.INTER_LINEAR)
-        
-        # Combine side by side
-        stereo = np.hstack([left_scaled, right_scaled])
-        
+        # Combine side by side - pre-allocate for speed
+        stereo = np.empty((height, width, 3), dtype=np.uint8)
+        stereo[:, :half_width] = left_scaled
+        stereo[:, half_width:] = right_scaled
         return stereo
     
     def resize_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Resize frame according to configuration"""
+        """Resize frame according to configuration - uses INTER_NEAREST for speed"""
         height, width = frame.shape[:2]
         
-        # Apply downscale factor
+        # Apply downscale factor (use INTER_NEAREST for speed - 3x faster than INTER_LINEAR)
         if self.config.downscale_factor < 1.0:
             new_width = int(width * self.config.downscale_factor)
             new_height = int(height * self.config.downscale_factor)
-            frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+            frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
         
         # Apply custom output resolution if specified
         if self.config.output_width > 0 and self.config.output_height > 0:
             frame = cv2.resize(
                 frame, 
                 (self.config.output_width, self.config.output_height),
-                interpolation=cv2.INTER_LINEAR
+                interpolation=cv2.INTER_NEAREST
             )
         
         return frame
@@ -105,6 +124,14 @@ class VREncoder:
         """Compress frame to bytes using configured method"""
         try:
             if self.config.compression_method == 'jpeg':
+                # Try TurboJPEG first (3-5x faster than OpenCV)
+                if HAS_TURBOJPEG and jpeg_encoder is not None:
+                    try:
+                        return jpeg_encoder.encode(frame, quality=self.config.jpeg_quality)
+                    except Exception:
+                        pass
+                
+                # Fallback to OpenCV
                 _, encoded = cv2.imencode('.jpg', frame, self.jpeg_params)
                 return encoded.tobytes()
             
@@ -116,7 +143,12 @@ class VREncoder:
                 return frame.tobytes()
             
             else:
-                # Default to JPEG
+                # Default to JPEG with TurboJPEG if available
+                if HAS_TURBOJPEG and jpeg_encoder is not None:
+                    try:
+                        return jpeg_encoder.encode(frame, quality=self.config.jpeg_quality)
+                    except Exception:
+                        pass
                 _, encoded = cv2.imencode('.jpg', frame, self.jpeg_params)
                 return encoded.tobytes()
                 
@@ -190,17 +222,18 @@ class AdaptiveEncoder(VREncoder):
         
         avg_encode_time = self.get_average_encode_time()
         
-        # If encoding takes too long, reduce quality
-        if avg_encode_time > self.target_frame_time * 0.5:
+        # If encoding takes too long (more than 80% of frame budget), reduce quality
+        # At 60fps, frame time is 16.6ms, so threshold is ~13.3ms
+        if avg_encode_time > self.target_frame_time * 0.8:
             # Reduce quality
-            new_quality = max(30, self.config.jpeg_quality - 5)
+            new_quality = max(40, self.config.jpeg_quality - 3)
             if new_quality != self.config.jpeg_quality:
                 self.config.jpeg_quality = new_quality
                 self._update_params()
                 self.quality_history.append(('decrease', new_quality, avg_encode_time))
         
-        # If we have headroom, increase quality
-        elif avg_encode_time < self.target_frame_time * 0.3:
+        # If we have lots of headroom (under 50%), increase quality
+        elif avg_encode_time < self.target_frame_time * 0.5:
             new_quality = min(95, self.config.jpeg_quality + 2)
             if new_quality != self.config.jpeg_quality:
                 self.config.jpeg_quality = new_quality

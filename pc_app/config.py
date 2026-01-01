@@ -28,7 +28,7 @@ class EncoderConfig:
     output_height: int = 0
     
     # JPEG quality for fallback (1-100)
-    jpeg_quality: int = 85
+    jpeg_quality: int = 65
     
     # Target bitrate in Kbps (0 = auto)
     target_bitrate: int = 0
@@ -43,7 +43,8 @@ class EncoderConfig:
     eye_separation: float = 0.03
     
     # Downscale factor (1.0 = no downscale, 0.5 = half resolution)
-    downscale_factor: float = 1.0
+    # Lower = faster encoding. For VR, 0.65-0.75 is usually enough
+    downscale_factor: float = 0.65
 
 
 @dataclass
@@ -104,25 +105,31 @@ class Config:
 
 
 # Quality presets for quick configuration
+# Downscale helps a lot with encoding speed - 0.5 = 4x less pixels to encode
 QUALITY_PRESETS = {
+    'ultra_performance': {  # For very slow PCs - maximum FPS
+        'jpeg_quality': 40,
+        'downscale_factor': 0.35,  # 35% = ~1/9 of pixels, 9x faster encode
+        'target_fps': 60,
+    },
     'ultra_low_latency': {
-        'jpeg_quality': 60,
-        'downscale_factor': 0.75,
+        'jpeg_quality': 50,
+        'downscale_factor': 0.5,  # 50% = 1/4 of pixels, 4x faster encode
         'target_fps': 60,
     },
     'low_latency': {
-        'jpeg_quality': 75,
-        'downscale_factor': 0.85,
+        'jpeg_quality': 65,
+        'downscale_factor': 0.65,
         'target_fps': 60,
     },
     'balanced': {
-        'jpeg_quality': 85,
-        'downscale_factor': 1.0,
+        'jpeg_quality': 75,
+        'downscale_factor': 0.75,
         'target_fps': 45,
     },
     'quality': {
-        'jpeg_quality': 95,
-        'downscale_factor': 1.0,
+        'jpeg_quality': 85,
+        'downscale_factor': 0.85,
         'target_fps': 30,
     },
 }

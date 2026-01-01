@@ -5,24 +5,35 @@ Simple PyQt5 interface for window selection, settings, and streaming control.
 
 import sys
 import os
+import io
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QSlider, QGroupBox, QGridLayout,
     QSpinBox, QCheckBox, QFrame, QListWidget, QListWidgetItem,
-    QStatusBar, QMessageBox, QTabWidget, QTextEdit, QSizePolicy
+    QStatusBar, QMessageBox, QTabWidget, QTextEdit, QSizePolicy, QScrollArea
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QByteArray, QSize
 from PyQt5.QtGui import QFont, QPixmap, QImage, QPalette, QColor
+
+
+try:
+    import qrcode
+    HAS_QRCODE = True
+except ImportError:
+    HAS_QRCODE = False
+
 
 import numpy as np
 import cv2
 import time
 import threading
 
+
 from config import Config, EncoderConfig, NetworkConfig, QUALITY_PRESETS, apply_preset
 from capture import CaptureManager, WindowEnumerator, WindowInfo
 from encoder import VREncoder, AdaptiveEncoder
 from server import StreamingServer, HTTPServer, ClientInfo, StreamStats
+
 
 
 class StreamingThread(QThread):
@@ -41,22 +52,23 @@ class StreamingThread(QThread):
         self._running = False
     
     def run(self):
-        """Main streaming loop"""
+        """Main streaming loop - optimized for maximum FPS"""
         self._running = True
         target_fps = self.config.capture.target_fps
         frame_time = 1.0 / target_fps
         
         frame_count = 0
-        start_time = time.time()
+        start_time = time.perf_counter()
+        last_frame_time = time.perf_counter()
         
         while self._running:
             loop_start = time.perf_counter()
             
             try:
-                # Capture frame
+                # Capture frame immediately - no waiting
                 frame = self.capture_manager.get_frame()
                 if frame is None:
-                    time.sleep(0.01)
+                    time.sleep(0.0005)  # Very short sleep on failure
                     continue
                 
                 # Encode frame
@@ -69,11 +81,20 @@ class StreamingThread(QThread):
                 
                 frame_count += 1
                 
+                # Calculate time spent on this frame
+                frame_duration = time.perf_counter() - loop_start
+                
+                # Only sleep if we're ahead of schedule
+                sleep_time = frame_time - frame_duration
+                if sleep_time > 0.0005:  # Only sleep if > 0.5ms
+                    time.sleep(sleep_time * 0.9)  # Sleep 90% of remaining time
+                
                 # Update stats every second
-                elapsed = time.time() - start_time
+                elapsed = time.perf_counter() - start_time
                 if elapsed >= 1.0:
+                    actual_fps = frame_count / elapsed
                     stats = {
-                        'capture_fps': self.capture_manager.get_fps(),
+                        'capture_fps': actual_fps,
                         'stream_fps': self.server.get_stats().current_fps,
                         'encode_time': self.encoder.get_last_encode_time(),
                         'clients': self.server.get_client_count(),
@@ -82,22 +103,17 @@ class StreamingThread(QThread):
                     }
                     self.stats_updated.emit(stats)
                     frame_count = 0
-                    start_time = time.time()
+                    start_time = time.perf_counter()
                 
             except Exception as e:
                 self.error_occurred.emit(str(e))
-                time.sleep(0.1)
-            
-            # Maintain target frame rate
-            elapsed = time.perf_counter() - loop_start
-            sleep_time = frame_time - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+                time.sleep(0.01)
     
     def stop(self):
         """Stop the streaming thread"""
         self._running = False
         self.wait(2000)
+
 
 
 class MainWindow(QMainWindow):
@@ -115,6 +131,7 @@ class MainWindow(QMainWindow):
         
         self.streaming_thread = None
         self.is_streaming = False
+        self.qr_pixmap = None
         
         # Setup UI
         self.init_ui()
@@ -259,7 +276,7 @@ class MainWindow(QMainWindow):
         preset_layout = QVBoxLayout(preset_group)
         
         self.preset_combo = QComboBox()
-        self.preset_combo.addItems(['ultra_low_latency', 'low_latency', 'balanced', 'quality'])
+        self.preset_combo.addItems(['ultra_performance', 'ultra_low_latency', 'low_latency', 'balanced', 'quality'])
         self.preset_combo.setCurrentText(self.config.encoder.preset)
         self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
         preset_layout.addWidget(self.preset_combo)
@@ -273,7 +290,7 @@ class MainWindow(QMainWindow):
         # JPEG Quality slider
         quality_layout.addWidget(QLabel("JPEG Quality:"), 0, 0)
         self.quality_slider = QSlider(Qt.Horizontal)
-        self.quality_slider.setRange(30, 100)
+        self.quality_slider.setRange(20, 100)  # Allow 20-100 for extreme presets
         self.quality_slider.setValue(self.config.encoder.jpeg_quality)
         self.quality_slider.valueChanged.connect(self.on_quality_changed)
         quality_layout.addWidget(self.quality_slider, 0, 1)
@@ -291,7 +308,7 @@ class MainWindow(QMainWindow):
         # Downscale factor
         quality_layout.addWidget(QLabel("Downscale:"), 2, 0)
         self.downscale_slider = QSlider(Qt.Horizontal)
-        self.downscale_slider.setRange(50, 100)
+        self.downscale_slider.setRange(30, 100)  # Allow 30% to 100%
         self.downscale_slider.setValue(int(self.config.encoder.downscale_factor * 100))
         self.downscale_slider.valueChanged.connect(self.on_downscale_changed)
         quality_layout.addWidget(self.downscale_slider, 2, 1)
@@ -341,7 +358,7 @@ class MainWindow(QMainWindow):
         layout.addStretch()
     
     def setup_connection_tab(self, parent):
-        """Setup the connection tab"""
+        """Setup the connection tab with responsive QR code"""
         layout = QVBoxLayout(parent)
         
         # Server Info
@@ -372,18 +389,50 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(server_group)
         
-        # Mobile App URL
+        # Mobile App URL with Responsive QR Code
         mobile_group = QGroupBox("Mobile App Access")
         mobile_layout = QVBoxLayout(mobile_group)
         
+        mobile_url = f"http://{self.server.get_server_ip()}:{self.config.network.http_port}"
+        
         mobile_info = QLabel(
-            f"Open this URL on your phone's browser:\n\n"
-            f"http://{self.server.get_server_ip()}:{self.config.network.http_port}"
+            f"Open this URL on your phone's browser:\n\n{mobile_url}"
         )
         mobile_info.setFont(QFont("Courier", 11))
         mobile_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         mobile_info.setAlignment(Qt.AlignCenter)
         mobile_layout.addWidget(mobile_info)
+        
+        # Responsive QR Code Container
+        if HAS_QRCODE:
+            # QR container widget with white background
+            qr_container = QWidget()
+            qr_container.setStyleSheet("background-color: white; border-radius: 8px;")
+            qr_container_layout = QVBoxLayout(qr_container)
+            qr_container_layout.setContentsMargins(20, 20, 20, 20)
+            
+            self.qr_label = QLabel()
+            self.qr_label.setAlignment(Qt.AlignCenter)
+            self.qr_label.setMinimumSize(200, 200)
+            self.qr_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self.qr_label.setStyleSheet("background-color: white; border: none;")
+            
+            qr_container_layout.addWidget(self.qr_label)
+            mobile_layout.addWidget(qr_container)
+            
+            # Generate QR code
+            self.update_qr_code(mobile_url)
+            
+            # Hint text OUTSIDE the grey box
+            qr_hint = QLabel("📱 Scan with your phone camera to instantly open the app")
+            qr_hint.setStyleSheet("color: #555; font-size: 12px; font-weight: 500; padding: 8px; background-color: transparent;")
+            qr_hint.setAlignment(Qt.AlignCenter)
+            mobile_layout.addWidget(qr_hint)
+        else:
+            no_qr = QLabel("❌ QR Code not available\n(Install 'qrcode': pip install qrcode[pil])")
+            no_qr.setStyleSheet("color: #ff6b35; font-size: 13px; padding: 25px; background: #fff3e0; border-radius: 8px;")
+            no_qr.setAlignment(Qt.AlignCenter)
+            mobile_layout.addWidget(no_qr)
         
         layout.addWidget(mobile_group)
         
@@ -403,7 +452,7 @@ class MainWindow(QMainWindow):
         self.http_port_spin.setValue(self.config.network.http_port)
         network_layout.addWidget(self.http_port_spin, 1, 1)
         
-        apply_network_btn = QPushButton("Apply Network Settings")
+        apply_network_btn = QPushButton("🔄 Apply Network Settings")
         apply_network_btn.clicked.connect(self.apply_network_settings)
         network_layout.addWidget(apply_network_btn, 2, 0, 1, 2)
         
@@ -420,6 +469,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(clients_group)
         
         layout.addStretch()
+    
+    def resizeEvent(self, event):
+        """Handle window resize to update QR code scaling"""
+        super().resizeEvent(event)
+        if HAS_QRCODE and self.qr_pixmap and hasattr(self, 'qr_label'):
+            # Use QTimer to debounce resize events
+            QTimer.singleShot(50, self.update_qr_scaling)
     
     def refresh_windows(self):
         """Refresh the list of available windows"""
@@ -454,6 +510,17 @@ class MainWindow(QMainWindow):
     
     def start_streaming(self):
         """Start the streaming process"""
+        # Create fresh server instances
+        self.server = StreamingServer(self.config.network)
+        self.server.set_callbacks(
+            on_connect=self.on_client_connect,
+            on_disconnect=self.on_client_disconnect,
+            on_stats=self.on_stats_update
+        )
+        
+        # Reset encoder to configured quality (not degraded from previous session)
+        self.encoder = AdaptiveEncoder(self.config.encoder, self.config.capture.target_fps)
+        
         # Start the WebSocket server
         self.server.start()
         
@@ -492,6 +559,11 @@ class MainWindow(QMainWindow):
             self.streaming_thread = None
         
         self.server.stop()
+        
+        # Stop HTTP server
+        if self.http_server:
+            self.http_server.stop()
+            self.http_server = None
         
         self.is_streaming = False
         self.stream_btn.setText("▶ Start Streaming")
@@ -594,6 +666,70 @@ class MainWindow(QMainWindow):
         """Apply current settings to encoder"""
         self.encoder.update_config(self.config.encoder)
     
+    def update_qr_code(self, url: str):
+        """Generate and display responsive QR code for the given URL"""
+        if not HAS_QRCODE:
+            return
+        
+        try:
+            # Generate QR code with high resolution
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(url)
+            qr.make(fit=True)
+            
+            # Create image
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+            
+            # Convert to PIL Image
+            if hasattr(qr_img, 'get_image'):
+                pil_img = qr_img.get_image()
+            else:
+                pil_img = qr_img
+            
+            # Ensure RGB mode
+            if pil_img.mode != 'RGB':
+                pil_img = pil_img.convert('RGB')
+            
+            # Convert to QPixmap
+            img_data = pil_img.tobytes("raw", "RGB")
+            qimage = QImage(img_data, pil_img.width, pil_img.height, 
+                           pil_img.width * 3, QImage.Format_RGB888)
+            
+            self.qr_pixmap = QPixmap.fromImage(qimage)
+            
+            # Initial scaling
+            self.update_qr_scaling()
+            
+        except Exception as e:
+            print(f"QR code generation error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def update_qr_scaling(self):
+        """Scale QR code to fit available space while maintaining aspect ratio"""
+        if not hasattr(self, 'qr_label') or not self.qr_pixmap:
+            return
+        
+        # Get available size
+        available_size = self.qr_label.size()
+        
+        # Calculate target size (90% of available space, max 350px)
+        target_size = min(available_size.width() * 0.9, available_size.height() * 0.9, 350)
+        
+        # Scale pixmap
+        scaled_pixmap = self.qr_pixmap.scaled(
+            int(target_size), int(target_size),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        
+        self.qr_label.setPixmap(scaled_pixmap)
+    
     def apply_network_settings(self):
         """Apply network settings"""
         self.config.network.port = self.ws_port_spin.value()
@@ -602,9 +738,14 @@ class MainWindow(QMainWindow):
         self.ws_port_label.setText(str(self.config.network.port))
         self.http_port_label.setText(str(self.config.network.http_port))
         
+        # Update QR code with new URL
+        if HAS_QRCODE and hasattr(self, 'qr_label'):
+            new_url = f"http://{self.server.get_server_ip()}:{self.config.network.http_port}"
+            self.update_qr_code(new_url)
+        
         QMessageBox.information(
             self, "Settings Applied",
-            "Network settings will take effect when you restart streaming."
+            "Network settings applied! Restart streaming for changes to take effect."
         )
     
     def save_settings(self):
@@ -621,6 +762,7 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+
 def main():
     app = QApplication(sys.argv)
     
@@ -631,6 +773,7 @@ def main():
     window.show()
     
     sys.exit(app.exec_())
+
 
 
 if __name__ == "__main__":

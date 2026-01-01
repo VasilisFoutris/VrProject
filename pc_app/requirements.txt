@@ -12,6 +12,11 @@ Pillow>=10.0.0
 numpy>=1.24.0
 opencv-python>=4.8.0
 
+# Fast JPEG encoding (optional but recommended - 3-5x faster)
+# Requires libturbojpeg to be installed on system
+# Windows: Download from https://github.com/libjpeg-turbo/libjpeg-turbo/releases
+PyTurboJPEG>=1.7.0
+
 # WebSocket Server for streaming
 websockets>=12.0
 aiohttp>=3.9.0
@@ -27,3 +32,6 @@ psutil>=5.9.0
 
 # Configuration
 pyyaml>=6.0.0
+
+# QR Code generation
+qrcode[pil]>=7.4.0
