@@ -15,6 +15,7 @@ class CaptureConfig:
     target_fps: int = 60  # Target frames per second
     capture_cursor: bool = True  # Include mouse cursor
     monitor_index: int = 0  # Monitor to capture (if no window selected)
+    use_gpu_capture: bool = True  # Use GPU-accelerated capture (DXGI/D3D11)
 
 
 @dataclass
@@ -45,6 +46,11 @@ class EncoderConfig:
     # Downscale factor (1.0 = no downscale, 0.5 = half resolution)
     # Lower = faster encoding. For VR, 0.65-0.75 is usually enough
     downscale_factor: float = 0.65
+    
+    # GPU acceleration settings
+    use_gpu: bool = True  # Enable GPU acceleration for image processing
+    gpu_device_id: int = 0  # GPU device ID (for multi-GPU systems)
+    use_nvjpeg: bool = True  # Use NVIDIA nvJPEG for JPEG encoding (requires NVIDIA GPU)
 
 
 @dataclass

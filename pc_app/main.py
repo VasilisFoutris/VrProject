@@ -9,6 +9,21 @@ import os
 # Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Set up CUDA environment for CuPy GPU acceleration (Windows)
+if sys.platform == 'win32':
+    # Add DLL directories for pip-installed NVIDIA packages
+    nvidia_base = os.path.join(os.path.dirname(__file__), 'venv', 'Lib', 'site-packages', 'nvidia')
+    cuda_nvrtc_bin = os.path.join(nvidia_base, 'cuda_nvrtc', 'bin')
+    cuda_runtime_bin = os.path.join(nvidia_base, 'cuda_runtime', 'bin')
+    
+    # Add DLL directories so ctypes can find CUDA libraries
+    for dll_dir in [cuda_nvrtc_bin, cuda_runtime_bin]:
+        if os.path.exists(dll_dir):
+            try:
+                os.add_dll_directory(dll_dir)
+            except (OSError, AttributeError):
+                pass
+
 def check_dependencies():
     """Check if all required dependencies are installed"""
     missing = []

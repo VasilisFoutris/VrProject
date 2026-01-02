@@ -46,10 +46,18 @@ class VRStreamViewer {
       backToConnection: document.getElementById("back-to-connection"),
     };
 
-    // Canvas context
+    // Canvas context - use willReadFrequently:false for GPU-accelerated rendering
     this.ctx = this.elements.canvas.getContext("2d", {
       alpha: false,
-      desynchronized: true, // Reduce latency
+      desynchronized: true, // Reduce latency - decouples canvas from event loop
+      willReadFrequently: false, // Optimize for drawing, not reading
+    });
+
+    // Create offscreen canvas for double-buffering (prevents jitter/tearing)
+    this.offscreenCanvas = document.createElement("canvas");
+    this.offscreenCtx = this.offscreenCanvas.getContext("2d", {
+      alpha: false,
+      willReadFrequently: false,
     });
 
     // WebSocket
@@ -82,9 +90,17 @@ class VRStreamViewer {
     this.frameBuffer = [];
     this.isProcessingFrame = false;
 
-    // Image for decoding
+    // Pending frame for synchronized rendering (prevents jitter)
+    this.pendingFrame = null;
+    this.frameReady = false;
+    this.renderScheduled = false;
+
+    // Reusable Image for decoding (legacy fallback)
     this.frameImage = new Image();
-    this.frameImage.onload = () => this.drawFrame();
+    this.frameImage.onload = () => this.onFrameImageLoaded();
+
+    // Track current blob URL for cleanup
+    this.currentFrameUrl = null;
 
     // Initialize
     this.init();
@@ -214,9 +230,15 @@ class VRStreamViewer {
     canvas.width = container.clientWidth || window.innerWidth;
     canvas.height = container.clientHeight || window.innerHeight;
 
-    // Optimize for mobile
+    // Sync offscreen canvas size for double-buffering
+    this.offscreenCanvas.width = canvas.width;
+    this.offscreenCanvas.height = canvas.height;
+
+    // Optimize for mobile - low quality for speed, reduce jitter
     this.ctx.imageSmoothingEnabled = true;
     this.ctx.imageSmoothingQuality = "low"; // Fast rendering
+    this.offscreenCtx.imageSmoothingEnabled = true;
+    this.offscreenCtx.imageSmoothingQuality = "low";
   }
 
   connect() {
@@ -385,7 +407,40 @@ class VRStreamViewer {
   }
 
   displayFrame(blob) {
-    // Create object URL for the blob
+    // Use createImageBitmap for GPU-accelerated decoding (prevents jitter)
+    // This decodes the JPEG using hardware acceleration where available
+    if (typeof createImageBitmap === "function") {
+      createImageBitmap(blob, {
+        premultiplyAlpha: "none",
+        colorSpaceConversion: "none", // Skip color conversion for speed
+      })
+        .then((bitmap) => {
+          // Store the decoded bitmap for synchronized rendering
+          if (this.pendingFrame && this.pendingFrame.close) {
+            this.pendingFrame.close(); // Release previous bitmap
+          }
+          this.pendingFrame = bitmap;
+          this.frameReady = true;
+
+          // Schedule render on next animation frame for smooth timing
+          if (!this.renderScheduled) {
+            this.renderScheduled = true;
+            requestAnimationFrame(() => this.renderFrame());
+          }
+        })
+        .catch((e) => {
+          // Fallback to Image element if createImageBitmap fails
+          console.warn("ImageBitmap failed, using fallback:", e);
+          this.displayFrameFallback(blob);
+        });
+    } else {
+      // Fallback for older browsers without createImageBitmap
+      this.displayFrameFallback(blob);
+    }
+  }
+
+  displayFrameFallback(blob) {
+    // Legacy fallback using Image element
     const url = URL.createObjectURL(blob);
 
     // Clean up previous URL
@@ -398,7 +453,61 @@ class VRStreamViewer {
     this.frameImage.src = url;
   }
 
-  drawFrame() {
+  onFrameImageLoaded() {
+    // Called when legacy Image element has loaded
+    // Draw directly without double-buffering for fallback
+    this.drawFrameLegacy();
+  }
+
+  renderFrame() {
+    this.renderScheduled = false;
+
+    if (!this.frameReady || !this.pendingFrame) {
+      // No frame ready, continue processing buffer
+      if (this.settings.bufferFrames > 0 && this.frameBuffer.length > 0) {
+        this.processNextFrame();
+      }
+      return;
+    }
+
+    this.frameReady = false;
+    const bitmap = this.pendingFrame;
+
+    const canvas = this.elements.canvas;
+    const offCanvas = this.offscreenCanvas;
+    const offCtx = this.offscreenCtx;
+
+    // Draw to offscreen canvas first (double-buffering prevents flicker)
+    offCtx.fillStyle = "#000";
+    offCtx.fillRect(0, 0, offCanvas.width, offCanvas.height);
+
+    // Calculate scaling to fit canvas while maintaining aspect ratio
+    const scale = Math.min(
+      offCanvas.width / bitmap.width,
+      offCanvas.height / bitmap.height
+    );
+
+    const drawWidth = bitmap.width * scale;
+    const drawHeight = bitmap.height * scale;
+    const drawX = (offCanvas.width - drawWidth) / 2;
+    const drawY = (offCanvas.height - drawHeight) / 2;
+
+    // Draw to offscreen canvas
+    offCtx.drawImage(bitmap, drawX, drawY, drawWidth, drawHeight);
+
+    // Atomic copy to visible canvas (prevents tearing/jitter)
+    this.ctx.drawImage(offCanvas, 0, 0);
+
+    // Continue processing buffer
+    if (this.settings.bufferFrames > 0) {
+      requestAnimationFrame(() => this.processNextFrame());
+    } else {
+      this.isProcessingFrame = false;
+    }
+  }
+
+  drawFrameLegacy() {
+    // Legacy draw method for browsers without createImageBitmap
     const canvas = this.elements.canvas;
     const ctx = this.ctx;
     const img = this.frameImage;

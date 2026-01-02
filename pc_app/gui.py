@@ -32,6 +32,17 @@ import threading
 from config import Config, EncoderConfig, NetworkConfig, QUALITY_PRESETS, apply_preset
 from capture import CaptureManager, WindowEnumerator, WindowInfo
 from encoder import VREncoder, AdaptiveEncoder
+
+# Try to import GPU encoder for hardware acceleration
+try:
+    from gpu_encoder import GPUEncoder, AdaptiveGPUEncoder, HAS_CUDA
+    HAS_GPU_ENCODER = True
+    print(f"GPU Encoder available - CUDA: {HAS_CUDA}")
+except ImportError as e:
+    print(f"GPU Encoder not available: {e}")
+    HAS_GPU_ENCODER = False
+    HAS_CUDA = False
+
 from server import StreamingServer, HTTPServer, ClientInfo, StreamStats
 
 
@@ -59,40 +70,45 @@ class StreamingThread(QThread):
         
         frame_count = 0
         start_time = time.perf_counter()
-        last_frame_time = time.perf_counter()
+        last_stats_time = time.perf_counter()
+        
+        # Pre-allocate for consistent timing
+        sleep_fn = time.sleep
+        perf_counter = time.perf_counter
         
         while self._running:
-            loop_start = time.perf_counter()
+            loop_start = perf_counter()
             
             try:
                 # Capture frame immediately - no waiting
                 frame = self.capture_manager.get_frame()
                 if frame is None:
-                    time.sleep(0.0005)  # Very short sleep on failure
+                    sleep_fn(0.0002)  # 0.2ms sleep on failure (reduced from 0.5ms)
                     continue
                 
-                # Encode frame
+                # Encode frame (GPU-accelerated when available)
                 encoded = self.encoder.encode_frame(frame)
                 if encoded is None:
                     continue
                 
-                # Push to server for broadcasting
+                # Push to server for broadcasting (async)
                 self.server.push_frame(encoded)
                 
                 frame_count += 1
                 
                 # Calculate time spent on this frame
-                frame_duration = time.perf_counter() - loop_start
+                frame_duration = perf_counter() - loop_start
                 
-                # Only sleep if we're ahead of schedule
+                # Adaptive sleep - only if we're significantly ahead
                 sleep_time = frame_time - frame_duration
-                if sleep_time > 0.0005:  # Only sleep if > 0.5ms
-                    time.sleep(sleep_time * 0.9)  # Sleep 90% of remaining time
+                if sleep_time > 0.001:  # Only sleep if > 1ms
+                    sleep_fn(sleep_time * 0.85)  # Sleep 85% of remaining time for tighter loop
                 
                 # Update stats every second
-                elapsed = time.perf_counter() - start_time
-                if elapsed >= 1.0:
-                    actual_fps = frame_count / elapsed
+                now = perf_counter()
+                if now - last_stats_time >= 1.0:
+                    elapsed = now - start_time
+                    actual_fps = frame_count / elapsed if elapsed > 0 else 0
                     stats = {
                         'capture_fps': actual_fps,
                         'stream_fps': self.server.get_stats().current_fps,
@@ -103,11 +119,12 @@ class StreamingThread(QThread):
                     }
                     self.stats_updated.emit(stats)
                     frame_count = 0
-                    start_time = time.perf_counter()
+                    start_time = now
+                    last_stats_time = now
                 
             except Exception as e:
                 self.error_occurred.emit(str(e))
-                time.sleep(0.01)
+                sleep_fn(0.005)  # 5ms on error (reduced from 10ms)
     
     def stop(self):
         """Stop the streaming thread"""
@@ -125,7 +142,15 @@ class MainWindow(QMainWindow):
         # Initialize components
         self.config = Config.load()
         self.capture_manager = CaptureManager()
-        self.encoder = AdaptiveEncoder(self.config.encoder, self.config.capture.target_fps)
+        
+        # Use GPU encoder if available and enabled
+        if HAS_GPU_ENCODER and self.config.encoder.use_gpu:
+            print("[GUI] Using GPU-accelerated encoder")
+            self.encoder = AdaptiveGPUEncoder(self.config.encoder, self.config.capture.target_fps)
+        else:
+            print("[GUI] Using CPU encoder")
+            self.encoder = AdaptiveEncoder(self.config.encoder, self.config.capture.target_fps)
+        
         self.server = StreamingServer(self.config.network)
         self.http_server = None
         
@@ -253,6 +278,7 @@ class MainWindow(QMainWindow):
             ('clients', 'Connected Clients:'),
             ('quality', 'Current Quality:'),
             ('bandwidth', 'Bandwidth:'),
+            ('gpu_accel', 'GPU Accel:'),
         ]
         
         for i, (key, label) in enumerate(stat_items):
@@ -262,6 +288,14 @@ class MainWindow(QMainWindow):
             stats_layout.addWidget(lbl, i, 0)
             stats_layout.addWidget(val, i, 1)
             self.stat_labels[key] = val
+        
+        # Set initial GPU status
+        if HAS_GPU_ENCODER and self.config.encoder.use_gpu:
+            self.stat_labels['gpu_accel'].setText("✅ Enabled")
+            self.stat_labels['gpu_accel'].setStyleSheet("color: #4CAF50;")
+        else:
+            self.stat_labels['gpu_accel'].setText("❌ Disabled")
+            self.stat_labels['gpu_accel'].setStyleSheet("color: #888;")
         
         layout.addWidget(stats_group)
         
@@ -338,6 +372,36 @@ class MainWindow(QMainWindow):
         vr_layout.addWidget(self.separation_label, 1, 2)
         
         layout.addWidget(vr_group)
+        
+        # GPU Acceleration Settings
+        gpu_group = QGroupBox("GPU Acceleration")
+        gpu_layout = QVBoxLayout(gpu_group)
+        
+        # GPU status label
+        if HAS_GPU_ENCODER and HAS_CUDA:
+            gpu_status = QLabel("✅ GPU acceleration available")
+            gpu_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        else:
+            gpu_status = QLabel("❌ GPU acceleration not available\n"
+                               "(Install: pip install cupy-cuda12x pynvjpeg)")
+            gpu_status.setStyleSheet("color: #ff6b35;")
+        gpu_layout.addWidget(gpu_status)
+        
+        # GPU enable checkbox
+        self.gpu_checkbox = QCheckBox("Enable GPU Acceleration")
+        self.gpu_checkbox.setChecked(self.config.encoder.use_gpu)
+        self.gpu_checkbox.setEnabled(HAS_GPU_ENCODER)
+        self.gpu_checkbox.stateChanged.connect(self.on_gpu_toggled)
+        gpu_layout.addWidget(self.gpu_checkbox)
+        
+        # nvJPEG checkbox
+        self.nvjpeg_checkbox = QCheckBox("Use nvJPEG for JPEG encoding (requires NVIDIA GPU)")
+        self.nvjpeg_checkbox.setChecked(self.config.encoder.use_nvjpeg)
+        self.nvjpeg_checkbox.setEnabled(HAS_GPU_ENCODER)
+        self.nvjpeg_checkbox.stateChanged.connect(self.on_nvjpeg_toggled)
+        gpu_layout.addWidget(self.nvjpeg_checkbox)
+        
+        layout.addWidget(gpu_group)
         
         # Adaptive encoding
         adaptive_group = QGroupBox("Adaptive Encoding")
@@ -519,7 +583,11 @@ class MainWindow(QMainWindow):
         )
         
         # Reset encoder to configured quality (not degraded from previous session)
-        self.encoder = AdaptiveEncoder(self.config.encoder, self.config.capture.target_fps)
+        # Use GPU encoder if available and enabled
+        if HAS_GPU_ENCODER and self.config.encoder.use_gpu:
+            self.encoder = AdaptiveGPUEncoder(self.config.encoder, self.config.capture.target_fps)
+        else:
+            self.encoder = AdaptiveEncoder(self.config.encoder, self.config.capture.target_fps)
         
         # Start the WebSocket server
         self.server.start()
@@ -593,6 +661,24 @@ class MainWindow(QMainWindow):
         else:
             bandwidth = f"{bytes_sent / 1024:.1f} KB"
         self.stat_labels['bandwidth'].setText(bandwidth)
+        
+        # Update GPU acceleration status
+        if hasattr(self.encoder, 'get_acceleration_status'):
+            accel = self.encoder.get_acceleration_status()
+            if accel.get('gpu_enabled'):
+                parts = []
+                if accel.get('nvjpeg'):
+                    parts.append("nvJPEG")
+                elif accel.get('turbojpeg'):
+                    parts.append("TurboJPEG")
+                if accel.get('cv2_cuda'):
+                    parts.append("CUDA")
+                status = "✅ " + ", ".join(parts) if parts else "✅ Enabled"
+                self.stat_labels['gpu_accel'].setText(status)
+                self.stat_labels['gpu_accel'].setStyleSheet("color: #4CAF50;")
+            else:
+                self.stat_labels['gpu_accel'].setText("❌ CPU only")
+                self.stat_labels['gpu_accel'].setStyleSheet("color: #888;")
     
     def on_stream_error(self, error: str):
         """Handle streaming errors"""
@@ -651,8 +737,20 @@ class MainWindow(QMainWindow):
     
     def on_adaptive_toggled(self, state: int):
         """Handle adaptive encoding toggle"""
-        if isinstance(self.encoder, AdaptiveEncoder):
+        if hasattr(self.encoder, 'adaptation_enabled'):
             self.encoder.adaptation_enabled = state == Qt.Checked
+    
+    def on_gpu_toggled(self, state: int):
+        """Handle GPU acceleration toggle"""
+        self.config.encoder.use_gpu = state == Qt.Checked
+        # Note: Encoder will be recreated on next stream start
+        self.statusBar.showMessage("GPU setting will apply on next stream start")
+    
+    def on_nvjpeg_toggled(self, state: int):
+        """Handle nvJPEG toggle"""
+        self.config.encoder.use_nvjpeg = state == Qt.Checked
+        # Note: Encoder will be recreated on next stream start
+        self.statusBar.showMessage("nvJPEG setting will apply on next stream start")
     
     def update_ui_from_config(self):
         """Update UI elements from current config"""
