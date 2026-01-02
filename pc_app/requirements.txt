@@ -35,3 +35,22 @@ pyyaml>=6.0.0
 
 # QR Code generation
 qrcode[pil]>=7.4.0
+
+# ============================================
+# GPU ACCELERATION (Optional but recommended)
+# ============================================
+# These packages enable GPU-accelerated encoding for maximum FPS/minimum latency.
+# They require NVIDIA GPU with CUDA support.
+
+# CuPy for GPU image processing (choose your CUDA version):
+# For CUDA 11.x: pip install cupy-cuda11x
+# For CUDA 12.x: pip install cupy-cuda12x
+cupy-cuda12x>=13.0.0
+
+# nvJPEG for hardware JPEG encoding (requires NVIDIA GPU):
+# pip install pynvjpeg
+pynvjpeg>=0.1.0
+
+# OpenCV with CUDA support (optional, requires building from source):
+# opencv-contrib-python does NOT include CUDA - you need to build OpenCV with CUDA manually
+# See: https://docs.opencv.org/master/d6/d15/tutorial_building_tegra_cuda.html
