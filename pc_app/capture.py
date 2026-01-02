@@ -235,7 +235,7 @@ class ScreenCapture:
         }
     
     def capture_frame(self) -> Optional[np.ndarray]:
-        """Capture a single frame"""
+        """Capture a single frame - optimized for performance"""
         region = self.get_capture_region()
         if region is None:
             return None
@@ -244,11 +244,13 @@ class ScreenCapture:
             # Capture using mss (very fast)
             screenshot = self.sct.grab(region)
             
-            # Convert to numpy array (BGRA format)
-            frame = np.array(screenshot, dtype=np.uint8)
+            # Convert to numpy array (BGRA format) - use np.asarray for zero-copy when possible
+            frame = np.asarray(screenshot, dtype=np.uint8)
             
-            # Convert BGRA to BGR
-            frame = frame[:, :, :3]
+            # Convert BGRA to BGR by slicing (creates a view, not a copy when contiguous)
+            # Use reshape trick for faster slicing
+            if frame.shape[2] == 4:
+                frame = frame[:, :, :3].copy()  # Need copy for contiguous memory
             
             # Update stats
             self.capture_count += 1

@@ -39,6 +39,11 @@ if errorlevel 1 (
 )
 
 echo.
+echo Installing CUDA runtime libraries for GPU acceleration...
+pip install nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 >nul 2>&1
+echo CUDA libraries installed.
+
+echo.
 echo ========================================
 echo Installation Complete!
 echo ========================================

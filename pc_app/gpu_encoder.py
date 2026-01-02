@@ -4,6 +4,40 @@ Uses CUDA for image processing and nvJPEG for hardware JPEG encoding.
 Falls back to CPU methods if GPU is not available.
 """
 
+import sys
+import os
+
+# Set up CUDA DLL paths for Windows BEFORE importing CuPy
+if sys.platform == 'win32':
+    # Add CUDA Toolkit bin directories (including x64 subdirectory for nvjpeg)
+    cuda_paths = [
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0\bin',
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0\bin\x64',  # nvjpeg DLLs
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin',
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin\x64',
+    ]
+    for cuda_bin in cuda_paths:
+        if os.path.exists(cuda_bin):
+            try:
+                os.add_dll_directory(cuda_bin)
+            except (OSError, AttributeError):
+                pass
+    
+    # Find the nvidia packages in venv or site-packages
+    for base_path in sys.path:
+        nvidia_base = os.path.join(base_path, 'nvidia')
+        if os.path.exists(nvidia_base):
+            cuda_nvrtc_bin = os.path.join(nvidia_base, 'cuda_nvrtc', 'bin')
+            cuda_runtime_bin = os.path.join(nvidia_base, 'cuda_runtime', 'bin')
+            nvjpeg_bin = os.path.join(nvidia_base, 'nvjpeg', 'bin')
+            for dll_dir in [cuda_nvrtc_bin, cuda_runtime_bin, nvjpeg_bin]:
+                if os.path.exists(dll_dir):
+                    try:
+                        os.add_dll_directory(dll_dir)
+                    except (OSError, AttributeError):
+                        pass
+            break
+
 import numpy as np
 from typing import Tuple, Optional
 import time
@@ -21,7 +55,12 @@ gpu_mat_cache = {}
 
 try:
     import cupy as cp
+    # Test that CuPy actually works with a simple operation
+    _test = cp.array([1, 2, 3])
+    _test_result = _test + 1  # This will fail if CUDA is not properly configured
+    del _test, _test_result
     HAS_CUPY = True
+    HAS_CUDA = True  # CuPy provides CUDA acceleration
     # Create a CUDA stream for async operations
     cuda_stream = cp.cuda.Stream(non_blocking=True)
     print("CuPy CUDA acceleration enabled")
@@ -29,42 +68,57 @@ except ImportError:
     print("CuPy not installed - GPU image processing disabled")
     print("  Install with: pip install cupy-cuda12x (adjust for your CUDA version)")
 except Exception as e:
-    print(f"CuPy error: {e}")
+    print(f"CuPy not available: {e}")
+    print("  GPU acceleration requires CUDA Toolkit to be installed.")
+    print("  Download from: https://developer.nvidia.com/cuda-downloads")
 
-# Try OpenCV CUDA
+# Try OpenCV CUDA (optional - requires custom OpenCV build with CUDA)
 try:
     import cv2
     if cv2.cuda.getCudaEnabledDeviceCount() > 0:
         HAS_CV2_CUDA = True
         HAS_CUDA = True
         print(f"OpenCV CUDA enabled - {cv2.cuda.getCudaEnabledDeviceCount()} GPU(s) detected")
-    else:
-        print("OpenCV CUDA not available (no CUDA devices)")
+    # Silently skip if no CUDA devices - this is expected with pip opencv-python
 except AttributeError:
-    print("OpenCV was not built with CUDA support")
+    pass  # OpenCV from pip doesn't have CUDA support - this is normal
 except Exception as e:
-    print(f"OpenCV CUDA check error: {e}")
+    pass
 
-# Try nvJPEG through pynvjpeg or nvidia-pyindex
+# Try nvJPEG through pynvjpeg for GPU JPEG encoding
 try:
     from nvjpeg import NvJpeg
+    # Test that nvJPEG actually works
+    _test_nvjpeg = NvJpeg()
+    del _test_nvjpeg
     HAS_NVJPEG = True
     HAS_CUDA = True
-    print("nvJPEG hardware JPEG encoding enabled")
-except ImportError:
-    print("nvJPEG not installed - using CPU JPEG encoding")
-    print("  Install with: pip install pynvjpeg (requires CUDA toolkit)")
+    print("nvJPEG GPU JPEG encoding enabled")
+except ImportError as e:
+    print(f"nvJPEG not available: {e}")
 except Exception as e:
-    print(f"nvJPEG error: {e}")
+    print(f"nvJPEG init error: {e}")
 
 # Also check for TurboJPEG as fast CPU fallback
 HAS_TURBOJPEG = False
 turbojpeg_encoder = None
 try:
     from turbojpeg import TurboJPEG, TJPF_BGR
-    turbojpeg_encoder = TurboJPEG()
-    HAS_TURBOJPEG = True
-except:
+    # Try common installation paths for libjpeg-turbo on Windows
+    turbojpeg_paths = [
+        None,  # Let it auto-detect
+        r'C:\libjpeg-turbo64\bin\turbojpeg.dll',
+        r'C:\libjpeg-turbo-gcc64\bin\libturbojpeg.dll',
+    ]
+    for lib_path in turbojpeg_paths:
+        try:
+            turbojpeg_encoder = TurboJPEG(lib_path) if lib_path else TurboJPEG()
+            HAS_TURBOJPEG = True
+            print("TurboJPEG encoder enabled" + (f" ({lib_path})" if lib_path else ""))
+            break
+        except:
+            continue
+except Exception as e:
     pass
 
 # Import standard libraries
@@ -290,11 +344,11 @@ class GPUEncoder:
     def compress_frame_nvjpeg(self, frame: np.ndarray) -> Optional[bytes]:
         """Compress frame using nvJPEG (GPU hardware encoding)"""
         try:
-            # nvJPEG expects RGB, our frame is BGR
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # pynvjpeg expects BGR format directly (same as OpenCV)
+            # No color conversion needed!
             
-            # Encode using nvJPEG
-            encoded = self.nvjpeg_encoder.encode(rgb_frame, self.config.jpeg_quality)
+            # Encode using nvJPEG - the encode method handles BGR input
+            encoded = self.nvjpeg_encoder.encode(frame, self.config.jpeg_quality)
             return bytes(encoded)
             
         except Exception as e:

@@ -70,40 +70,45 @@ class StreamingThread(QThread):
         
         frame_count = 0
         start_time = time.perf_counter()
-        last_frame_time = time.perf_counter()
+        last_stats_time = time.perf_counter()
+        
+        # Pre-allocate for consistent timing
+        sleep_fn = time.sleep
+        perf_counter = time.perf_counter
         
         while self._running:
-            loop_start = time.perf_counter()
+            loop_start = perf_counter()
             
             try:
                 # Capture frame immediately - no waiting
                 frame = self.capture_manager.get_frame()
                 if frame is None:
-                    time.sleep(0.0005)  # Very short sleep on failure
+                    sleep_fn(0.0002)  # 0.2ms sleep on failure (reduced from 0.5ms)
                     continue
                 
-                # Encode frame
+                # Encode frame (GPU-accelerated when available)
                 encoded = self.encoder.encode_frame(frame)
                 if encoded is None:
                     continue
                 
-                # Push to server for broadcasting
+                # Push to server for broadcasting (async)
                 self.server.push_frame(encoded)
                 
                 frame_count += 1
                 
                 # Calculate time spent on this frame
-                frame_duration = time.perf_counter() - loop_start
+                frame_duration = perf_counter() - loop_start
                 
-                # Only sleep if we're ahead of schedule
+                # Adaptive sleep - only if we're significantly ahead
                 sleep_time = frame_time - frame_duration
-                if sleep_time > 0.0005:  # Only sleep if > 0.5ms
-                    time.sleep(sleep_time * 0.9)  # Sleep 90% of remaining time
+                if sleep_time > 0.001:  # Only sleep if > 1ms
+                    sleep_fn(sleep_time * 0.85)  # Sleep 85% of remaining time for tighter loop
                 
                 # Update stats every second
-                elapsed = time.perf_counter() - start_time
-                if elapsed >= 1.0:
-                    actual_fps = frame_count / elapsed
+                now = perf_counter()
+                if now - last_stats_time >= 1.0:
+                    elapsed = now - start_time
+                    actual_fps = frame_count / elapsed if elapsed > 0 else 0
                     stats = {
                         'capture_fps': actual_fps,
                         'stream_fps': self.server.get_stats().current_fps,
@@ -114,11 +119,12 @@ class StreamingThread(QThread):
                     }
                     self.stats_updated.emit(stats)
                     frame_count = 0
-                    start_time = time.perf_counter()
+                    start_time = now
+                    last_stats_time = now
                 
             except Exception as e:
                 self.error_occurred.emit(str(e))
-                time.sleep(0.01)
+                sleep_fn(0.005)  # 5ms on error (reduced from 10ms)
     
     def stop(self):
         """Stop the streaming thread"""

@@ -47,9 +47,13 @@ qrcode[pil]>=7.4.0
 # For CUDA 12.x: pip install cupy-cuda12x
 cupy-cuda12x>=13.0.0
 
+# CUDA runtime libraries (for DLL dependencies)
+nvidia-cuda-nvrtc-cu12
+nvidia-cuda-runtime-cu12
+
 # nvJPEG for hardware JPEG encoding (requires NVIDIA GPU):
-# pip install pynvjpeg
-pynvjpeg>=0.1.0
+# NOTE: pynvjpeg has compilation issues on Windows, disabled for now
+# pynvjpeg>=0.0.13
 
 # OpenCV with CUDA support (optional, requires building from source):
 # opencv-contrib-python does NOT include CUDA - you need to build OpenCV with CUDA manually
