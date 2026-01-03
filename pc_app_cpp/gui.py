@@ -1,6 +1,7 @@
 """
 VR Screen Streamer - Python GUI Launcher for C++ Backend
 Uses the PyQt5 GUI from pc_app to control the high-performance C++ backend.
+Features: Dark/Light themes, System Tray, Keyboard Shortcuts, Notifications
 """
 
 import sys
@@ -13,15 +14,20 @@ import ctypes
 from ctypes import wintypes
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
+from enum import Enum
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QSlider, QGroupBox, QGridLayout,
     QSpinBox, QCheckBox, QFrame, QListWidget, QListWidgetItem,
-    QStatusBar, QMessageBox, QTabWidget, QTextEdit, QSizePolicy, QScrollArea
+    QStatusBar, QMessageBox, QTabWidget, QTextEdit, QSizePolicy, QScrollArea,
+    QSystemTrayIcon, QMenu, QAction, QShortcut, QToolTip, QStyle, QStyleFactory
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QProcess
-from PyQt5.QtGui import QFont, QPixmap, QBrush, QColor
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QProcess, QSettings
+from PyQt5.QtGui import (
+    QFont, QPixmap, QBrush, QColor, QIcon, QPalette, QKeySequence,
+    QFontDatabase
+)
 
 try:
     import qrcode
@@ -29,6 +35,534 @@ try:
     HAS_QRCODE = True
 except ImportError:
     HAS_QRCODE = False
+
+
+# ============================================================================
+# Theme System
+# ============================================================================
+
+class ThemeMode(Enum):
+    SYSTEM = "system"
+    DARK = "dark"
+    LIGHT = "light"
+
+
+class ThemeManager:
+    """Manages dark/light theme switching with OS detection"""
+    
+    # Dark theme colors (matching mobile app)
+    DARK_COLORS = {
+        'background': '#1a1a2e',
+        'background_secondary': '#0f0f1a',
+        'surface': '#16213e',
+        'surface_hover': '#1e2a4a',
+        'text_primary': '#ffffff',
+        'text_secondary': '#b0b0b0',
+        'primary': '#4CAF50',
+        'primary_dark': '#388E3C',
+        'secondary': '#2196F3',
+        'error': '#f44336',
+        'warning': '#ff9800',
+        'success': '#4CAF50',
+        'border': 'rgba(255, 255, 255, 0.1)',
+    }
+    
+    # Light theme colors - MODERN DESIGN with subtle gradients and clean look
+    LIGHT_COLORS = {
+        'background': '#f8fafc',           # Very subtle blue-gray
+        'background_secondary': '#f1f5f9', # Slightly darker
+        'surface': '#ffffff',              # Pure white cards
+        'surface_hover': '#f8fafc',        # Subtle hover
+        'text_primary': '#0f172a',         # Dark slate
+        'text_secondary': '#64748b',       # Slate gray
+        'primary': '#10b981',              # Modern emerald green
+        'primary_dark': '#059669',         # Darker emerald
+        'secondary': '#3b82f6',            # Modern blue
+        'error': '#ef4444',                # Modern red
+        'warning': '#f59e0b',              # Amber
+        'success': '#10b981',              # Emerald
+        'border': '#e2e8f0',               # Soft border - no transparency
+    }
+    
+    @staticmethod
+    def is_system_dark_mode() -> bool:
+        """Detect if Windows is using dark mode"""
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+            )
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            winreg.CloseKey(key)
+            return value == 0  # 0 = dark, 1 = light
+        except:
+            return True  # Default to dark
+    
+    @classmethod
+    def get_stylesheet(cls, mode: ThemeMode) -> str:
+        """Generate complete stylesheet for the given theme"""
+        if mode == ThemeMode.SYSTEM:
+            colors = cls.DARK_COLORS if cls.is_system_dark_mode() else cls.LIGHT_COLORS
+        elif mode == ThemeMode.DARK:
+            colors = cls.DARK_COLORS
+        else:
+            colors = cls.LIGHT_COLORS
+        
+        is_light = mode == ThemeMode.LIGHT or (mode == ThemeMode.SYSTEM and not cls.is_system_dark_mode())
+        
+        # Text colors based on theme
+        text_bright = '#0f172a' if is_light else '#ffffff'
+        text_medium = '#475569' if is_light else '#cbd5e1'
+        text_muted = '#64748b' if is_light else '#94a3b8'
+        
+        # Arrow color for spinbox/combobox
+        arrow_color = '#475569' if is_light else '#ffffff'
+        
+        # Card shadow for light mode (more modern look)
+        card_border = f"1px solid {colors['border']}" if is_light else f"1px solid {colors['border']}"
+        
+        return f"""
+            /* Main Window - Clean background */
+            QMainWindow, QWidget {{
+                background-color: {colors['background']};
+                color: {text_bright};
+                font-size: 13px;
+                font-family: 'Segoe UI', 'Arial', sans-serif;
+            }}
+            
+            /* Labels */
+            QLabel {{
+                color: {text_bright};
+                font-size: 13px;
+                padding: 2px;
+            }}
+            
+            QLabel[subtitle="true"] {{
+                color: {text_muted};
+                font-size: 12px;
+            }}
+            
+            /* Group Boxes - Modern card style with more padding */
+            QGroupBox {{
+                background-color: {colors['surface']};
+                border: {card_border};
+                border-radius: 12px;
+                margin-top: 20px;
+                padding: 20px;
+                padding-top: 32px;
+                font-weight: 600;
+                font-size: 13px;
+            }}
+            
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 16px;
+                padding: 6px 14px;
+                color: {colors['primary']};
+                font-size: 14px;
+                font-weight: 600;
+            }}
+            
+            /* Buttons - Modern with subtle hover */
+            QPushButton {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-weight: 500;
+                min-height: 24px;
+            }}
+            
+            QPushButton:hover {{
+                background-color: {colors['background_secondary']};
+                border-color: {colors['primary']};
+            }}
+            
+            QPushButton:pressed {{
+                background-color: {colors['background']};
+            }}
+            
+            QPushButton:disabled {{
+                color: {text_muted};
+                background-color: {colors['background_secondary']};
+                border-color: {colors['border']};
+            }}
+            
+            QPushButton[primary="true"] {{
+                background-color: {colors['primary']};
+                color: white;
+                border: none;
+                font-weight: 600;
+            }}
+            
+            QPushButton[primary="true"]:hover {{
+                background-color: {colors['primary_dark']};
+            }}
+            
+            QPushButton[danger="true"] {{
+                background-color: {colors['error']};
+                color: white;
+                border: none;
+            }}
+            
+            /* Input Fields - Clean and spacious */
+            QLineEdit {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 8px;
+                padding: 10px 14px;
+                min-height: 22px;
+                selection-background-color: {colors['primary']};
+            }}
+            
+            QLineEdit:focus {{
+                border: 2px solid {colors['primary']};
+                padding: 9px 13px;
+            }}
+            
+            QSpinBox {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 8px;
+                padding: 8px 12px;
+                padding-right: 36px;
+                min-height: 26px;
+                min-width: 90px;
+            }}
+            
+            QSpinBox:focus {{
+                border: 2px solid {colors['primary']};
+            }}
+            
+            QSpinBox::up-button {{
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 28px;
+                height: 15px;
+                border-left: {card_border};
+                border-top-right-radius: 8px;
+                background-color: {colors['background']};
+            }}
+            
+            QSpinBox::up-button:hover {{
+                background-color: {colors['primary']};
+            }}
+            
+            QSpinBox::down-button {{
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 28px;
+                height: 15px;
+                border-left: {card_border};
+                border-top: {card_border};
+                border-bottom-right-radius: 8px;
+                background-color: {colors['background']};
+            }}
+            
+            QSpinBox::down-button:hover {{
+                background-color: {colors['primary']};
+            }}
+            
+            QSpinBox::up-arrow {{
+                image: none;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-bottom: 7px solid {arrow_color};
+                width: 0;
+                height: 0;
+            }}
+            
+            QSpinBox::up-button:hover QSpinBox::up-arrow,
+            QSpinBox::up-arrow:hover {{
+                border-bottom-color: white;
+            }}
+            
+            QSpinBox::down-arrow {{
+                image: none;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-top: 7px solid {arrow_color};
+                width: 0;
+                height: 0;
+            }}
+            
+            QSpinBox::down-button:hover QSpinBox::down-arrow,
+            QSpinBox::down-arrow:hover {{
+                border-top-color: white;
+            }}
+            
+            QComboBox {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 8px;
+                padding: 10px 14px;
+                padding-right: 36px;
+                min-height: 22px;
+            }}
+            
+            QComboBox:focus {{
+                border: 2px solid {colors['primary']};
+            }}
+            
+            QComboBox::drop-down {{
+                border: none;
+                width: 30px;
+                padding-right: 10px;
+            }}
+            
+            QComboBox::down-arrow {{
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-top: 7px solid {arrow_color};
+                width: 0;
+                height: 0;
+            }}
+            
+            QComboBox QAbstractItemView {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                selection-background-color: {colors['primary']};
+                selection-color: white;
+                border: {card_border};
+                border-radius: 8px;
+                padding: 6px;
+                outline: none;
+            }}
+            
+            QComboBox QAbstractItemView::item {{
+                padding: 8px 12px;
+                border-radius: 4px;
+            }}
+            
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {colors['background_secondary']};
+            }}
+            
+            /* Sliders - Modern rounded */
+            QSlider::groove:horizontal {{
+                background: {colors['background_secondary']};
+                height: 8px;
+                border-radius: 4px;
+            }}
+            
+            QSlider::handle:horizontal {{
+                background: {colors['primary']};
+                width: 20px;
+                height: 20px;
+                margin: -6px 0;
+                border-radius: 10px;
+                border: 3px solid {colors['surface']};
+            }}
+            
+            QSlider::handle:horizontal:hover {{
+                background: {colors['primary_dark']};
+            }}
+            
+            QSlider::sub-page:horizontal {{
+                background: {colors['primary']};
+                border-radius: 4px;
+            }}
+            
+            /* Checkboxes - Modern with clear state */
+            QCheckBox {{
+                color: {text_bright};
+                spacing: 12px;
+                font-size: 13px;
+                padding: 4px;
+            }}
+            
+            QCheckBox::indicator {{
+                width: 24px;
+                height: 24px;
+                border-radius: 6px;
+                border: 2px solid {colors['border']};
+                background-color: {colors['surface']};
+            }}
+            
+            QCheckBox::indicator:hover {{
+                border-color: {colors['primary']};
+            }}
+            
+            QCheckBox::indicator:checked {{
+                background-color: {colors['primary']};
+                border-color: {colors['primary']};
+                image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBvbHlsaW5lIHBvaW50cz0iMjAgNiA5IDE3IDQgMTIiPjwvcG9seWxpbmU+PC9zdmc+);
+            }}
+            
+            /* Tab Widget - Clean modern tabs */
+            QTabWidget::pane {{
+                border: {card_border};
+                border-radius: 12px;
+                background-color: {colors['surface']};
+                margin-top: -1px;
+            }}
+            
+            QTabBar::tab {{
+                background-color: transparent;
+                color: {text_muted};
+                padding: 14px 36px;
+                margin-right: 4px;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 100px;
+            }}
+            
+            QTabBar::tab:selected {{
+                background-color: {colors['surface']};
+                color: {colors['primary']};
+                font-weight: 600;
+                border: {card_border};
+                border-bottom: 2px solid {colors['surface']};
+            }}
+            
+            QTabBar::tab:hover:!selected {{
+                background-color: {colors['background_secondary']};
+                color: {text_bright};
+            }}
+            
+            /* List Widget - Modern with spacing */
+            QListWidget {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 10px;
+                outline: none;
+                font-size: 13px;
+                padding: 8px;
+            }}
+            
+            QListWidget::item {{
+                padding: 14px 16px;
+                margin: 2px 4px;
+                border-radius: 8px;
+                color: {text_bright};
+            }}
+            
+            QListWidget::item:selected {{
+                background-color: {colors['primary']};
+                color: white;
+            }}
+            
+            QListWidget::item:hover:!selected {{
+                background-color: {colors['background_secondary']};
+            }}
+            
+            /* Text Edit (Log) */
+            QTextEdit {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 10px;
+                font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                padding: 12px;
+                selection-background-color: {colors['primary']};
+            }}
+            
+            /* Scroll Area */
+            QScrollArea {{
+                border: none;
+                background-color: transparent;
+            }}
+            
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 14px;
+                margin: 4px 2px;
+                border-radius: 7px;
+            }}
+            
+            QScrollBar::handle:vertical {{
+                background: {colors['border']};
+                min-height: 40px;
+                border-radius: 5px;
+                margin: 0 3px;
+            }}
+            
+            QScrollBar::handle:vertical:hover {{
+                background: {text_muted};
+            }}
+            
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0;
+            }}
+            
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
+            
+            /* Status Bar */
+            QStatusBar {{
+                background-color: {colors['surface']};
+                color: {text_muted};
+                border-top: {card_border};
+                padding: 6px 12px;
+                font-size: 12px;
+            }}
+            
+            /* Menu - Modern dropdown */
+            QMenu {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 10px;
+                padding: 8px;
+            }}
+            
+            QMenu::item {{
+                padding: 10px 28px;
+                border-radius: 6px;
+                margin: 2px 4px;
+            }}
+            
+            QMenu::item:selected {{
+                background-color: {colors['primary']};
+                color: white;
+            }}
+            
+            /* Tooltips */
+            QToolTip {{
+                background-color: {colors['surface']};
+                color: {text_bright};
+                border: {card_border};
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 12px;
+            }}
+            
+            QMenu::separator {{
+                height: 1px;
+                background: {colors['border']};
+                margin: 4px 8px;
+            }}
+            
+            /* Tooltips */
+            QToolTip {{
+                background-color: {colors['surface']};
+                color: {colors['text_primary']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                padding: 6px 10px;
+            }}
+        """
+    
+    @classmethod
+    def get_colors(cls, mode: ThemeMode) -> dict:
+        """Get color dictionary for the current theme"""
+        if mode == ThemeMode.SYSTEM:
+            return cls.DARK_COLORS if cls.is_system_dark_mode() else cls.LIGHT_COLORS
+        elif mode == ThemeMode.DARK:
+            return cls.DARK_COLORS
+        else:
+            return cls.LIGHT_COLORS
 
 
 # ============================================================================
@@ -364,24 +898,30 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # Settings storage
+        self.settings = QSettings("VRStreamer", "VRScreenStreamer")
+        
+        # Theme
+        self.theme_mode = ThemeMode(self.settings.value("theme_mode", ThemeMode.SYSTEM.value))
+        
         # Find C++ executable
         self.exe_path = self._find_executable()
         
         # Settings
-        self.port = 8765
-        self.http_port = 8080
-        self.quality = 75
-        self.fps = 60
-        self.scale = 0.85
+        self.port = int(self.settings.value("port", 8765))
+        self.http_port = int(self.settings.value("http_port", 8080))
+        self.quality = int(self.settings.value("quality", 75))
+        self.fps = int(self.settings.value("fps", 60))
+        self.scale = float(self.settings.value("scale", 0.85))
         self.monitor = 1  # Default to first monitor (1-indexed now)
         self.window_hwnd = None  # For window capture
         self.capture_mode = "monitor"  # "monitor" or "window"
-        self.vr_enabled = True
-        self.preset = "balanced"
+        self.vr_enabled = self.settings.value("vr_enabled", True, type=bool)
+        self.preset = self.settings.value("preset", "balanced")
         
         # GPU/Encoder options
-        self.use_gpu = True
-        self.jpeg_library = "turbojpeg"  # "turbojpeg" or "nvjpeg"
+        self.use_gpu = self.settings.value("use_gpu", True, type=bool)
+        self.jpeg_library = self.settings.value("jpeg_library", "turbojpeg")
         
         # Window list
         self.windows: List[WindowInfo] = []
@@ -391,8 +931,20 @@ class MainWindow(QMainWindow):
         self.backend = None
         self.is_streaming = False
         
+        # Notifications
+        self.notifications_enabled = True
+        
         # Setup UI
         self.init_ui()
+        
+        # Setup system tray
+        self.setup_system_tray()
+        
+        # Setup keyboard shortcuts
+        self.setup_shortcuts()
+        
+        # Apply theme
+        self.apply_theme(self.theme_mode)
         
         # Setup refresh timer
         self.refresh_timer = QTimer()
@@ -420,6 +972,173 @@ class MainWindow(QMainWindow):
                 
         return os.path.join(base_dir, 'build', 'Release', 'vr_streamer.exe')
     
+    def setup_system_tray(self):
+        """Setup system tray icon and menu"""
+        self.tray_icon = QSystemTrayIcon(self)
+        
+        # Create a simple icon (green circle when streaming, gray when not)
+        self.update_tray_icon()
+        
+        # Create tray menu
+        tray_menu = QMenu()
+        
+        # Show/Hide action
+        self.show_action = QAction("Show Window", self)
+        self.show_action.triggered.connect(self.show_window)
+        tray_menu.addAction(self.show_action)
+        
+        tray_menu.addSeparator()
+        
+        # Stream control
+        self.tray_stream_action = QAction("▶ Start Streaming", self)
+        self.tray_stream_action.triggered.connect(self.toggle_streaming)
+        tray_menu.addAction(self.tray_stream_action)
+        
+        tray_menu.addSeparator()
+        
+        # Theme submenu
+        theme_menu = QMenu("🎨 Theme", self)
+        
+        self.theme_system_action = QAction("System", self)
+        self.theme_system_action.setCheckable(True)
+        self.theme_system_action.triggered.connect(lambda: self.set_theme(ThemeMode.SYSTEM))
+        theme_menu.addAction(self.theme_system_action)
+        
+        self.theme_dark_action = QAction("Dark", self)
+        self.theme_dark_action.setCheckable(True)
+        self.theme_dark_action.triggered.connect(lambda: self.set_theme(ThemeMode.DARK))
+        theme_menu.addAction(self.theme_dark_action)
+        
+        self.theme_light_action = QAction("Light", self)
+        self.theme_light_action.setCheckable(True)
+        self.theme_light_action.triggered.connect(lambda: self.set_theme(ThemeMode.LIGHT))
+        theme_menu.addAction(self.theme_light_action)
+        
+        tray_menu.addMenu(theme_menu)
+        self.update_theme_menu()
+        
+        tray_menu.addSeparator()
+        
+        # Quit action
+        quit_action = QAction("❌ Quit", self)
+        quit_action.triggered.connect(self.quit_app)
+        tray_menu.addAction(quit_action)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.tray_activated)
+        self.tray_icon.show()
+        
+        # Set tooltip
+        self.tray_icon.setToolTip("VR Screen Streamer - Not streaming")
+    
+    def update_tray_icon(self):
+        """Update tray icon based on streaming state"""
+        # Create a colored icon
+        pixmap = QPixmap(32, 32)
+        if self.is_streaming:
+            pixmap.fill(QColor("#4CAF50"))  # Green when streaming
+        else:
+            pixmap.fill(QColor("#666666"))  # Gray when not
+        
+        self.tray_icon.setIcon(QIcon(pixmap))
+    
+    def update_theme_menu(self):
+        """Update theme menu checkboxes"""
+        self.theme_system_action.setChecked(self.theme_mode == ThemeMode.SYSTEM)
+        self.theme_dark_action.setChecked(self.theme_mode == ThemeMode.DARK)
+        self.theme_light_action.setChecked(self.theme_mode == ThemeMode.LIGHT)
+    
+    def tray_activated(self, reason):
+        """Handle tray icon activation"""
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_window()
+    
+    def show_window(self):
+        """Show and activate the main window"""
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+    
+    def setup_shortcuts(self):
+        """Setup keyboard shortcuts"""
+        # Start/Stop streaming: Ctrl+Enter
+        self.shortcut_stream = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self.shortcut_stream.activated.connect(self.toggle_streaming)
+        
+        # Refresh sources: F5
+        self.shortcut_refresh = QShortcut(QKeySequence("F5"), self)
+        self.shortcut_refresh.activated.connect(self.refresh_sources)
+        
+        # Toggle theme: Ctrl+T
+        self.shortcut_theme = QShortcut(QKeySequence("Ctrl+T"), self)
+        self.shortcut_theme.activated.connect(self.cycle_theme)
+        
+        # Minimize to tray: Ctrl+M
+        self.shortcut_minimize = QShortcut(QKeySequence("Ctrl+M"), self)
+        self.shortcut_minimize.activated.connect(self.hide)
+        
+        # Quit: Ctrl+Q
+        self.shortcut_quit = QShortcut(QKeySequence("Ctrl+Q"), self)
+        self.shortcut_quit.activated.connect(self.quit_app)
+    
+    def cycle_theme(self):
+        """Cycle through themes"""
+        if self.theme_mode == ThemeMode.SYSTEM:
+            self.set_theme(ThemeMode.DARK)
+        elif self.theme_mode == ThemeMode.DARK:
+            self.set_theme(ThemeMode.LIGHT)
+        else:
+            self.set_theme(ThemeMode.SYSTEM)
+    
+    def set_theme(self, mode: ThemeMode):
+        """Set the theme mode"""
+        self.theme_mode = mode
+        self.settings.setValue("theme_mode", mode.value)
+        self.apply_theme(mode)
+        self.update_theme_menu()
+        
+        # Update theme combo in settings if it exists
+        if hasattr(self, 'theme_combo'):
+            self.theme_combo.blockSignals(True)
+            index = {ThemeMode.SYSTEM: 0, ThemeMode.DARK: 1, ThemeMode.LIGHT: 2}[mode]
+            self.theme_combo.setCurrentIndex(index)
+            self.theme_combo.blockSignals(False)
+    
+    def apply_theme(self, mode: ThemeMode):
+        """Apply the selected theme"""
+        stylesheet = ThemeManager.get_stylesheet(mode)
+        self.setStyleSheet(stylesheet)
+        
+        # Update status bar message
+        theme_names = {ThemeMode.SYSTEM: "System", ThemeMode.DARK: "Dark", ThemeMode.LIGHT: "Light"}
+        self.statusBar.showMessage(f"Theme: {theme_names[mode]}", 2000)
+    
+    def show_notification(self, title: str, message: str, icon=QSystemTrayIcon.Information):
+        """Show a system tray notification"""
+        if self.notifications_enabled and self.tray_icon.isVisible():
+            self.tray_icon.showMessage(title, message, icon, 3000)
+    
+    def quit_app(self):
+        """Properly quit the application"""
+        self.stop_streaming()
+        self.tray_icon.hide()
+        QApplication.quit()
+    
+    def closeEvent(self, event):
+        """Handle window close - minimize to tray instead"""
+        if self.tray_icon.isVisible():
+            self.hide()
+            self.tray_icon.showMessage(
+                "VR Screen Streamer",
+                "Application minimized to tray. Right-click for options.",
+                QSystemTrayIcon.Information,
+                2000
+            )
+            event.ignore()
+        else:
+            self.stop_streaming()
+            event.accept()
+
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("VR Screen Streamer (C++ High-Performance)")
@@ -478,98 +1197,148 @@ class MainWindow(QMainWindow):
             self.statusBar.setStyleSheet("color: red;")
             
     def setup_stream_tab(self, parent):
-        """Setup the streaming tab"""
+        """Setup the streaming tab - sources bigger, statistics at bottom"""
         layout = QVBoxLayout(parent)
+        layout.setSpacing(12)
         
-        # Capture Source Selection
-        source_group = QGroupBox("Capture Source")
+        # Capture Source Selection - takes most space (stretch=3)
+        source_group = QGroupBox("📺 Capture Source")
         source_layout = QVBoxLayout(source_group)
+        source_layout.setContentsMargins(12, 20, 12, 12)
         
-        # Refresh button
-        refresh_btn = QPushButton("🔄 Refresh Sources")
+        # Header row with refresh button
+        header_row = QHBoxLayout()
+        self.selected_label = QLabel("Selected: Monitor 1 (default)")
+        self.selected_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        header_row.addWidget(self.selected_label)
+        header_row.addStretch()
+        
+        refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.clicked.connect(self.refresh_sources)
-        source_layout.addWidget(refresh_btn)
+        refresh_btn.setToolTip("Refresh the list of available capture sources")
+        header_row.addWidget(refresh_btn)
+        source_layout.addLayout(header_row)
         
-        # Source list (monitors + windows)
+        # Source list (monitors + windows) - grows to fill space
         self.source_list = QListWidget()
-        self.source_list.setMinimumHeight(200)
+        self.source_list.setMinimumHeight(250)
         # Connect multiple signals to catch all selection methods
         self.source_list.itemClicked.connect(self.on_source_selected)
         self.source_list.itemDoubleClicked.connect(self.on_source_selected)
         self.source_list.currentItemChanged.connect(self.on_source_current_changed)
         self.source_list.itemSelectionChanged.connect(self.on_item_selection_changed)
-        source_layout.addWidget(self.source_list)
+        source_layout.addWidget(self.source_list, 1)  # Stretch factor
         
-        # Currently selected
-        self.selected_label = QLabel("Selected: Monitor 1 (default)")
-        self.selected_label.setStyleSheet("font-weight: bold;")
-        source_layout.addWidget(self.selected_label)
+        layout.addWidget(source_group, 3)  # Stretch factor 3 - takes most space
         
-        layout.addWidget(source_group)
-        
-        # Stream Control
-        control_group = QGroupBox("Stream Control")
+        # Stream Control - compact, fixed height
+        control_group = QGroupBox("🎬 Stream Control")
         control_layout = QVBoxLayout(control_group)
+        control_layout.setContentsMargins(12, 20, 12, 12)
         
         # Start/Stop button
         self.stream_btn = QPushButton("▶ Start Streaming")
         self.stream_btn.setFont(QFont("Arial", 14, QFont.Bold))
         self.stream_btn.setMinimumHeight(50)
         self.stream_btn.clicked.connect(self.toggle_streaming)
-        self.stream_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
+        self.stream_btn.setProperty("primary", True)
+        self.stream_btn.setToolTip("Start or stop the VR stream (Ctrl+Enter)")
         control_layout.addWidget(self.stream_btn)
         
-        layout.addWidget(control_group)
+        layout.addWidget(control_group, 0)  # No stretch - fixed size
         
-        # Stats Display
-        stats_group = QGroupBox("Statistics")
-        stats_layout = QGridLayout(stats_group)
+        # Stats Display - at bottom, compact horizontal layout
+        stats_group = QGroupBox("📊 Statistics")
+        stats_layout = QHBoxLayout(stats_group)
+        stats_layout.setContentsMargins(12, 20, 12, 12)
+        stats_layout.setSpacing(20)
         
         self.stat_labels = {}
         stat_items = [
-            ('capture_fps', 'Capture FPS:'),
-            ('encode_fps', 'Encode FPS:'),
-            ('stream_fps', 'Stream FPS:'),
-            ('clients', 'Connected Clients:'),
-            ('quality', 'Current Quality:'),
-            ('bitrate', 'Bitrate:'),
-            ('backend', 'Backend:'),
+            ('capture_fps', '🎥 Capture'),
+            ('encode_fps', '⚙ Encode'),
+            ('stream_fps', '📡 Stream'),
+            ('clients', '👥 Clients'),
+            ('quality', '✨ Quality'),
+            ('bitrate', '📊 Bitrate'),
         ]
         
-        for i, (key, label) in enumerate(stat_items):
+        for key, label in stat_items:
+            stat_frame = QVBoxLayout()
+            stat_frame.setSpacing(2)
+            
             lbl = QLabel(label)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet("font-size: 11px; color: #888;")
+            stat_frame.addWidget(lbl)
+            
             val = QLabel("--")
-            val.setFont(QFont("Courier", 10))
-            stats_layout.addWidget(lbl, i, 0)
-            stats_layout.addWidget(val, i, 1)
+            val.setAlignment(Qt.AlignCenter)
+            val.setFont(QFont("Courier", 12, QFont.Bold))
+            stat_frame.addWidget(val)
+            
+            stats_layout.addLayout(stat_frame)
             self.stat_labels[key] = val
         
-        self.stat_labels['backend'].setText("C++ (TurboJPEG)")
-        self.stat_labels['backend'].setStyleSheet("color: #4CAF50; font-weight: bold;")
+        # Backend info at the end
+        stats_layout.addStretch()
+        backend_frame = QVBoxLayout()
+        backend_label = QLabel("🔧 Backend")
+        backend_label.setAlignment(Qt.AlignCenter)
+        backend_label.setStyleSheet("font-size: 11px; color: #888;")
+        backend_frame.addWidget(backend_label)
         
-        layout.addWidget(stats_group)
-        layout.addStretch()
+        backend_val = QLabel("C++ (TurboJPEG)")
+        backend_val.setAlignment(Qt.AlignCenter)
+        backend_val.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 12px;")
+        backend_frame.addWidget(backend_val)
+        stats_layout.addLayout(backend_frame)
+        self.stat_labels['backend'] = backend_val
+        
+        layout.addWidget(stats_group, 0)  # No stretch - fixed at bottom
         
     def setup_settings_tab(self, parent):
-        """Setup the settings tab"""
+        """Setup the settings tab with tooltips and theme options"""
         # Make scrollable
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_widget = QWidget()
         layout = QVBoxLayout(scroll_widget)
         
+        # Appearance Settings (Theme)
+        appearance_group = QGroupBox("🎨 Appearance")
+        appearance_layout = QGridLayout(appearance_group)
+        appearance_layout.setContentsMargins(16, 24, 16, 16)
+        appearance_layout.setHorizontalSpacing(16)
+        
+        theme_label = QLabel("Theme:")
+        theme_label.setToolTip("Choose the application color theme")
+        appearance_layout.addWidget(theme_label, 0, 0)
+        
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(['System', 'Dark', 'Light'])
+        self.theme_combo.setCurrentIndex({ThemeMode.SYSTEM: 0, ThemeMode.DARK: 1, ThemeMode.LIGHT: 2}[self.theme_mode])
+        self.theme_combo.currentIndexChanged.connect(self.on_theme_combo_changed)
+        self.theme_combo.setToolTip("System: Follow Windows theme\nDark: Always use dark mode\nLight: Always use light mode")
+        appearance_layout.addWidget(self.theme_combo, 0, 1)
+        
+        # Notifications toggle
+        notif_label = QLabel("Notifications:")
+        notif_label.setToolTip("Show system notifications for events")
+        appearance_layout.addWidget(notif_label, 1, 0)
+        
+        self.notifications_checkbox = QCheckBox("Enable notifications")
+        self.notifications_checkbox.setChecked(self.notifications_enabled)
+        self.notifications_checkbox.stateChanged.connect(lambda s: setattr(self, 'notifications_enabled', s == Qt.Checked))
+        self.notifications_checkbox.setToolTip("Show notifications when streaming starts/stops or clients connect")
+        appearance_layout.addWidget(self.notifications_checkbox, 1, 1)
+        
+        layout.addWidget(appearance_group)
+        
         # Quality Preset
-        preset_group = QGroupBox("Quality Preset")
+        preset_group = QGroupBox("📊 Quality Preset")
         preset_layout = QVBoxLayout(preset_group)
+        preset_layout.setContentsMargins(16, 24, 16, 16)
         
         self.preset_combo = QComboBox()
         self.preset_combo.addItems([
@@ -577,38 +1346,57 @@ class MainWindow(QMainWindow):
         ])
         self.preset_combo.setCurrentText(self.preset)
         self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
+        self.preset_combo.setToolTip(
+            "Quick presets to balance quality and performance:\n"
+            "• Ultra Performance: Lowest latency, lower quality\n"
+            "• Low Latency: Fast streaming, good quality\n"
+            "• Balanced: Recommended for most users\n"
+            "• Quality: Higher quality, more bandwidth\n"
+            "• Maximum Quality: Best quality, highest bandwidth"
+        )
         preset_layout.addWidget(self.preset_combo)
         
         layout.addWidget(preset_group)
         
         # Video Quality
-        quality_group = QGroupBox("Video Quality")
+        quality_group = QGroupBox("🎬 Video Quality")
         quality_layout = QGridLayout(quality_group)
+        quality_layout.setContentsMargins(16, 24, 16, 16)
+        quality_layout.setHorizontalSpacing(16)
         
         # JPEG Quality slider
-        quality_layout.addWidget(QLabel("JPEG Quality:"), 0, 0)
+        jpeg_label = QLabel("JPEG Quality:")
+        jpeg_label.setToolTip("Higher values = better quality but larger file size (20-100)")
+        quality_layout.addWidget(jpeg_label, 0, 0)
         self.quality_slider = QSlider(Qt.Horizontal)
         self.quality_slider.setRange(20, 100)
         self.quality_slider.setValue(self.quality)
         self.quality_slider.valueChanged.connect(self.on_quality_changed)
+        self.quality_slider.setToolTip("JPEG compression quality (20=lowest, 100=highest)")
         quality_layout.addWidget(self.quality_slider, 0, 1)
         self.quality_label = QLabel(str(self.quality))
         quality_layout.addWidget(self.quality_label, 0, 2)
         
         # Target FPS
-        quality_layout.addWidget(QLabel("Target FPS:"), 1, 0)
+        fps_label = QLabel("Target FPS:")
+        fps_label.setToolTip("Maximum frames per second to stream (15-120)")
+        quality_layout.addWidget(fps_label, 1, 0)
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(15, 120)
         self.fps_spin.setValue(self.fps)
         self.fps_spin.valueChanged.connect(lambda v: setattr(self, 'fps', v))
+        self.fps_spin.setToolTip("Higher FPS = smoother video but more CPU/bandwidth")
         quality_layout.addWidget(self.fps_spin, 1, 1)
         
         # Downscale factor
-        quality_layout.addWidget(QLabel("Downscale:"), 2, 0)
+        scale_label = QLabel("Downscale:")
+        scale_label.setToolTip("Reduce resolution to improve performance")
+        quality_layout.addWidget(scale_label, 2, 0)
         self.downscale_slider = QSlider(Qt.Horizontal)
         self.downscale_slider.setRange(30, 100)
         self.downscale_slider.setValue(int(self.scale * 100))
         self.downscale_slider.valueChanged.connect(self.on_downscale_changed)
+        self.downscale_slider.setToolTip("100% = Full resolution, 50% = Half resolution")
         quality_layout.addWidget(self.downscale_slider, 2, 1)
         self.downscale_label = QLabel(f"{self.scale:.0%}")
         quality_layout.addWidget(self.downscale_label, 2, 2)
@@ -616,54 +1404,86 @@ class MainWindow(QMainWindow):
         layout.addWidget(quality_group)
         
         # VR Settings
-        vr_group = QGroupBox("VR Settings")
+        vr_group = QGroupBox("🥽 VR Settings")
         vr_layout = QVBoxLayout(vr_group)
+        vr_layout.setContentsMargins(16, 24, 16, 16)
         
         self.vr_checkbox = QCheckBox("Enable VR Mode (Side-by-Side)")
         self.vr_checkbox.setChecked(self.vr_enabled)
         self.vr_checkbox.stateChanged.connect(lambda s: setattr(self, 'vr_enabled', s == Qt.Checked))
+        self.vr_checkbox.setToolTip("Duplicate the image side-by-side for VR headset viewing")
         vr_layout.addWidget(self.vr_checkbox)
         
         layout.addWidget(vr_group)
         
         # GPU Acceleration Settings
-        gpu_group = QGroupBox("GPU Acceleration")
+        gpu_group = QGroupBox("🚀 GPU Acceleration")
         gpu_layout = QVBoxLayout(gpu_group)
+        gpu_layout.setContentsMargins(16, 24, 16, 16)
         
         self.gpu_checkbox = QCheckBox("Enable GPU Acceleration")
         self.gpu_checkbox.setChecked(self.use_gpu)
         self.gpu_checkbox.stateChanged.connect(self.on_gpu_toggled)
+        self.gpu_checkbox.setToolTip("Use GPU for faster encoding when available")
         gpu_layout.addWidget(self.gpu_checkbox)
         
         # JPEG Library selection
         jpeg_layout = QHBoxLayout()
-        jpeg_layout.addWidget(QLabel("JPEG Library:"))
+        jpeg_lib_label = QLabel("JPEG Library:")
+        jpeg_lib_label.setToolTip("Select the JPEG encoding library")
+        jpeg_layout.addWidget(jpeg_lib_label)
         self.jpeg_combo = QComboBox()
         self.jpeg_combo.addItems(['TurboJPEG (CPU)', 'nvJPEG (GPU/CUDA)'])
         self.jpeg_combo.setCurrentIndex(0 if self.jpeg_library == "turbojpeg" else 1)
         self.jpeg_combo.currentIndexChanged.connect(self.on_jpeg_library_changed)
+        self.jpeg_combo.setToolTip(
+            "TurboJPEG: Fast CPU-based encoding, works on all systems\n"
+            "nvJPEG: GPU-accelerated encoding, requires NVIDIA GPU with CUDA"
+        )
         jpeg_layout.addWidget(self.jpeg_combo)
         gpu_layout.addLayout(jpeg_layout)
         
         # GPU status note
-        gpu_note = QLabel("Note: nvJPEG requires NVIDIA GPU with CUDA support")
-        gpu_note.setStyleSheet("color: gray; font-size: 10px;")
+        gpu_note = QLabel("💡 nvJPEG requires NVIDIA GPU with CUDA support")
+        gpu_note.setProperty("subtitle", True)
         gpu_layout.addWidget(gpu_note)
         
         layout.addWidget(gpu_group)
         
         # Network Settings
-        network_group = QGroupBox("Network")
+        network_group = QGroupBox("🌐 Network")
         network_layout = QGridLayout(network_group)
+        network_layout.setContentsMargins(16, 24, 16, 16)
+        network_layout.setHorizontalSpacing(16)
         
-        network_layout.addWidget(QLabel("WebSocket Port:"), 0, 0)
+        ws_port_label = QLabel("WebSocket Port:")
+        ws_port_label.setToolTip("Port for the streaming WebSocket server")
+        network_layout.addWidget(ws_port_label, 0, 0)
         self.ws_port_spin = QSpinBox()
         self.ws_port_spin.setRange(1024, 65535)
         self.ws_port_spin.setValue(self.port)
         self.ws_port_spin.valueChanged.connect(lambda v: setattr(self, 'port', v))
+        self.ws_port_spin.setToolTip("Default: 8765. Change if there's a port conflict.")
         network_layout.addWidget(self.ws_port_spin, 0, 1)
         
         layout.addWidget(network_group)
+        
+        # Keyboard Shortcuts Info
+        shortcuts_group = QGroupBox("⌨️ Keyboard Shortcuts")
+        shortcuts_layout = QVBoxLayout(shortcuts_group)
+        shortcuts_layout.setContentsMargins(16, 24, 16, 16)
+        
+        shortcuts_info = QLabel(
+            "<b>Ctrl+Enter</b> - Start/Stop streaming<br>"
+            "<b>F5</b> - Refresh sources<br>"
+            "<b>Ctrl+T</b> - Cycle theme<br>"
+            "<b>Ctrl+M</b> - Minimize to tray<br>"
+            "<b>Ctrl+Q</b> - Quit application"
+        )
+        shortcuts_info.setWordWrap(True)
+        shortcuts_layout.addWidget(shortcuts_info)
+        
+        layout.addWidget(shortcuts_group)
         
         layout.addStretch()
         
@@ -674,29 +1494,38 @@ class MainWindow(QMainWindow):
     def setup_connection_tab(self, parent):
         """Setup the connection tab"""
         layout = QVBoxLayout(parent)
+        layout.setSpacing(16)
         
         # Server Info
-        server_group = QGroupBox("Server Information")
+        server_group = QGroupBox("🖥️ Server Information")
         server_layout = QGridLayout(server_group)
+        server_layout.setContentsMargins(20, 28, 20, 20)
+        server_layout.setHorizontalSpacing(20)
+        server_layout.setVerticalSpacing(12)
         
         server_layout.addWidget(QLabel("WebSocket Port:"), 0, 0)
         self.ws_port_label = QLabel(str(self.port))
-        self.ws_port_label.setFont(QFont("Courier", 12))
+        self.ws_port_label.setFont(QFont("Cascadia Code", 12))
+        self.ws_port_label.setStyleSheet("font-weight: 600;")
         server_layout.addWidget(self.ws_port_label, 0, 1)
         
         # Connection URL will be shown when streaming
         server_layout.addWidget(QLabel("Status:"), 1, 0)
         self.connection_status = QLabel("Not streaming")
+        self.connection_status.setStyleSheet("font-weight: 500;")
         server_layout.addWidget(self.connection_status, 1, 1)
         
         layout.addWidget(server_group)
         
         # Mobile App URL
-        mobile_group = QGroupBox("Mobile App Access")
+        mobile_group = QGroupBox("📱 Mobile App Access")
         mobile_layout = QVBoxLayout(mobile_group)
+        mobile_layout.setContentsMargins(20, 28, 20, 20)
+        mobile_layout.setSpacing(16)
         
         self.mobile_info = QLabel("Start streaming to see connection info")
         self.mobile_info.setAlignment(Qt.AlignCenter)
+        self.mobile_info.setStyleSheet("font-size: 14px; padding: 16px;")
         mobile_layout.addWidget(self.mobile_info)
         
         if HAS_QRCODE:
@@ -838,9 +1667,15 @@ class MainWindow(QMainWindow):
         selected_items = self.source_list.selectedItems()
         if selected_items:
             self.on_source_selected(selected_items[0])
+    
+    def on_theme_combo_changed(self, index: int):
+        """Handle theme combo box change"""
+        modes = [ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT]
+        self.set_theme(modes[index])
                 
     def on_preset_changed(self, preset: str):
         self.preset = preset
+        self.settings.setValue("preset", preset)
         presets = {
             'ultra_performance': (40, 0.5),
             'low_latency': (55, 0.65),
@@ -858,13 +1693,16 @@ class MainWindow(QMainWindow):
     def on_quality_changed(self, value: int):
         self.quality = value
         self.quality_label.setText(str(value))
+        self.settings.setValue("quality", value)
         
     def on_downscale_changed(self, value: int):
         self.scale = value / 100.0
         self.downscale_label.setText(f"{self.scale:.0%}")
+        self.settings.setValue("scale", self.scale)
         
     def on_gpu_toggled(self, state: int):
         self.use_gpu = (state == Qt.Checked)
+        self.settings.setValue("use_gpu", self.use_gpu)
         # Update backend label
         if self.use_gpu and self.jpeg_library == "nvjpeg":
             self.stat_labels['backend'].setText("C++ (nvJPEG/GPU)")
@@ -873,6 +1711,7 @@ class MainWindow(QMainWindow):
             
     def on_jpeg_library_changed(self, index: int):
         self.jpeg_library = "turbojpeg" if index == 0 else "nvjpeg"
+        self.settings.setValue("jpeg_library", self.jpeg_library)
         # Update backend label
         if self.use_gpu and self.jpeg_library == "nvjpeg":
             self.stat_labels['backend'].setText("C++ (nvJPEG/GPU)")
@@ -945,16 +1784,14 @@ class MainWindow(QMainWindow):
         
         self.is_streaming = True
         self.stream_btn.setText("⏹ Stop Streaming")
-        self.stream_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
-        """)
+        self.stream_btn.setProperty("danger", True)
+        self.stream_btn.style().unpolish(self.stream_btn)
+        self.stream_btn.style().polish(self.stream_btn)
+        
+        # Update tray
+        self.update_tray_icon()
+        self.tray_stream_action.setText("⏹ Stop Streaming")
+        self.tray_icon.setToolTip(f"VR Screen Streamer - Streaming on port {self.port}")
         
     def stop_streaming(self):
         if self.backend:
@@ -963,17 +1800,19 @@ class MainWindow(QMainWindow):
             
         self.is_streaming = False
         self.stream_btn.setText("▶ Start Streaming")
-        self.stream_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
+        self.stream_btn.setProperty("danger", False)
+        self.stream_btn.setProperty("primary", True)
+        self.stream_btn.style().unpolish(self.stream_btn)
+        self.stream_btn.style().polish(self.stream_btn)
+        
         self.connection_status.setText("Not streaming")
+        
+        # Update tray
+        self.update_tray_icon()
+        self.tray_stream_action.setText("▶ Start Streaming")
+        self.tray_icon.setToolTip("VR Screen Streamer - Not streaming")
+        
+        self.show_notification("Streaming Stopped", "VR Screen Streamer has stopped streaming.")
         
     def on_backend_output(self, line: str):
         self.log_text.append(line)
@@ -991,13 +1830,17 @@ class MainWindow(QMainWindow):
         if 'quality' in stats:
             self.stat_labels['quality'].setText(str(stats['quality']))
         if 'clients' in stats:
-            self.stat_labels['clients'].setText(str(stats['clients']))
+            clients = stats['clients']
+            self.stat_labels['clients'].setText(str(clients))
+            # Update tray tooltip with client count
+            self.tray_icon.setToolTip(f"VR Screen Streamer - {clients} client(s) connected")
         if 'bitrate' in stats:
             self.stat_labels['bitrate'].setText(f"{stats['bitrate']:.2f} Mbps")
             
     def on_backend_error(self, error: str):
         self.log_text.append(f"ERROR: {error}")
         self.statusBar.showMessage(f"Error: {error}")
+        self.show_notification("Error", error, QSystemTrayIcon.Critical)
         
     def on_backend_started(self):
         import socket
@@ -1010,6 +1853,12 @@ class MainWindow(QMainWindow):
         self.connection_status.setText(f"Streaming on ws://{ip}:{self.port}")
         self.mobile_info.setText(f"Open http://{ip}:{self.http_port} on your phone")
         self.statusBar.showMessage(f"Streaming on port {self.port}")
+        
+        # Show notification
+        self.show_notification(
+            "Streaming Started", 
+            f"VR Screen Streamer is now streaming on port {self.port}\nOpen http://{ip}:{self.http_port} on your phone"
+        )
         
         # Generate QR code
         if HAS_QRCODE:
@@ -1030,17 +1879,22 @@ class MainWindow(QMainWindow):
             
     def on_backend_stopped(self):
         self.statusBar.showMessage("Streaming stopped")
-        
-    def closeEvent(self, event):
-        self.stop_streaming()
-        event.accept()
 
 
 def main():
     app = QApplication(sys.argv)
     
-    # Set style
+    # Set application metadata
+    app.setApplicationName("VR Screen Streamer")
+    app.setOrganizationName("VRStreamer")
+    app.setApplicationVersion("2.0.0")
+    
+    # Set style to Fusion for consistent look across platforms
     app.setStyle('Fusion')
+    
+    # Enable high DPI scaling
+    app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     
     window = MainWindow()
     window.show()

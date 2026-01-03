@@ -6,41 +6,82 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#000000">
+    <meta name="theme-color" content="#1a1a2e" id="theme-color-meta">
+    <meta name="description" content="VR Screen Viewer - Stream your PC screen to your phone in VR">
+    <meta name="apple-mobile-web-app-title" content="VR Viewer">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
     
     <title>VR Screen Viewer</title>
     <link rel="stylesheet" href="style.css">
     
+    <!-- Preload critical resources -->
+    <link rel="preconnect" href="data:">
+    
     <!-- Prevent phone from sleeping -->
     <script>
+        // Initialize theme before render to prevent flash
+        (function() {
+            const savedTheme = localStorage.getItem('vr-theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = savedTheme || (prefersDark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+            
+            // Update theme-color meta for browser UI
+            const themeColors = { dark: '#1a1a2e', light: '#f5f5f5' };
+            document.getElementById('theme-color-meta')?.setAttribute('content', themeColors[theme]);
+        })();
+        
+        // Wake lock
         if ('wakeLock' in navigator) {
             navigator.wakeLock.request('screen').catch(e => console.log('Wake Lock error:', e));
         }
     </script>
 </head>
 <body>
+    <!-- Skip to main content (accessibility) -->
+    <a href="#connection-screen" class="skip-link">Skip to main content</a>
+    
+    <!-- Theme Toggle Button -->
+    <button class="theme-toggle-container" id="theme-toggle" aria-label="Toggle dark/light theme" role="switch">
+        <div class="theme-toggle">
+            <span class="icon" aria-hidden="true">🌙</span>
+            <span class="label">Dark</span>
+        </div>
+    </button>
+    
+    <!-- Toast Notification Container -->
+    <div id="toast-container" role="alert" aria-live="polite" aria-atomic="true"></div>
     <!-- Connection Screen -->
-    <div id="connection-screen" class="screen active">
+    <div id="connection-screen" class="screen active" role="main" aria-labelledby="connection-title">
         <div class="container">
-            <h1>🎮 VR Screen Viewer</h1>
+            <h1 id="connection-title">🎮 VR Screen Viewer</h1>
             <p class="subtitle">Connect to your PC to start streaming</p>
             
-            <div class="input-group">
-                <label for="server-ip">PC IP Address</label>
-                <input type="text" id="server-ip" placeholder="192.168.1.100" autocomplete="off">
-            </div>
+            <form id="connection-form" aria-label="Connection settings">
+                <div class="input-group">
+                    <label for="server-ip" id="ip-label">PC IP Address</label>
+                    <input type="text" id="server-ip" placeholder="192.168.1.100" autocomplete="off" 
+                           aria-describedby="ip-help" inputmode="decimal" pattern="[0-9.]+">
+                    <small id="ip-help" class="visually-hidden">Enter your PC's local IP address</small>
+                </div>
+                
+                <div class="input-group">
+                    <label for="server-port" id="port-label">WebSocket Port</label>
+                    <input type="number" id="server-port" value="8765" min="1024" max="65535"
+                           aria-describedby="port-help">
+                    <small id="port-help" class="visually-hidden">Default port is 8765</small>
+                </div>
+                
+                <button type="submit" id="connect-btn" class="primary-btn" aria-describedby="connect-status">
+                    <span class="btn-icon" aria-hidden="true">📡</span>
+                    <span>Connect</span>
+                </button>
+            </form>
             
-            <div class="input-group">
-                <label for="server-port">WebSocket Port</label>
-                <input type="number" id="server-port" value="8765" min="1024" max="65535">
-            </div>
-            
-            <button id="connect-btn" class="primary-btn">
-                <span class="btn-icon">📡</span>
-                Connect
-            </button>
-            
-            <div id="connection-status" class="status"></div>
+            <div id="connection-status" class="status" role="status" aria-live="polite"></div>
             
             <div class="recent-connections" id="recent-connections">
                 <h3>Recent Connections</h3>
@@ -50,12 +91,26 @@
     </div>
     
     <!-- Settings Screen -->
-    <div id="settings-screen" class="screen">
+    <div id="settings-screen" class="screen" role="dialog" aria-labelledby="settings-title">
         <div class="container">
-            <h2>⚙️ Settings</h2>
+            <h2 id="settings-title">⚙️ Settings</h2>
             
-            <div class="settings-group">
-                <h3>Display</h3>
+            <!-- Theme Settings -->
+            <div class="settings-group" role="group" aria-labelledby="theme-settings-title">
+                <h3 id="theme-settings-title">Appearance</h3>
+                
+                <div class="setting-item">
+                    <label for="theme-select">Theme</label>
+                    <select id="theme-select" aria-describedby="theme-help">
+                        <option value="system">System Default</option>
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="settings-group" role="group" aria-labelledby="display-settings-title">
+                <h3 id="display-settings-title">Display</h3>
                 
                 <div class="setting-item">
                     <label>VR Mode</label>
@@ -118,30 +173,55 @@
     </div>
     
     <!-- Viewer Screen -->
-    <div id="viewer-screen" class="screen">
-        <canvas id="vr-canvas"></canvas>
+    <div id="viewer-screen" class="screen" role="main" aria-label="VR Stream Viewer">
+        <canvas id="vr-canvas" aria-label="VR stream display"></canvas>
+        
+        <!-- Connection Health Indicator -->
+        <div id="connection-health" class="overlay connection-health excellent" aria-live="polite">
+            <div class="signal-bars" aria-hidden="true">
+                <div class="signal-bar"></div>
+                <div class="signal-bar"></div>
+                <div class="signal-bar"></div>
+                <div class="signal-bar"></div>
+            </div>
+            <span class="health-label">Excellent</span>
+        </div>
         
         <!-- Stats Overlay -->
-        <div id="stats-overlay" class="overlay">
+        <div id="stats-overlay" class="overlay" role="status" aria-label="Stream statistics">
             <div class="stat">FPS: <span id="stat-fps">0</span></div>
             <div class="stat">Latency: <span id="stat-latency">0</span>ms</div>
             <div class="stat">Size: <span id="stat-size">0</span>KB</div>
             <div class="stat">Frames: <span id="stat-frames">0</span></div>
         </div>
         
+        <!-- Gyroscope Indicator (for VR alignment) -->
+        <div id="gyro-indicator" class="overlay gyro-indicator hidden" aria-label="Device orientation">
+            <span class="gyro-icon" aria-hidden="true">📱</span>
+            <span class="gyro-status">Gyroscope</span>
+        </div>
+        
         <!-- Controls Overlay -->
-        <div id="controls-overlay" class="overlay controls">
-            <button id="disconnect-btn" class="control-btn">❌</button>
-            <button id="settings-btn" class="control-btn">⚙️</button>
-            <button id="fullscreen-viewer-btn" class="control-btn">📺</button>
+        <div id="controls-overlay" class="overlay controls" role="toolbar" aria-label="Stream controls">
+            <button id="disconnect-btn" class="control-btn" aria-label="Disconnect from stream" title="Disconnect">
+                <span aria-hidden="true">❌</span>
+            </button>
+            <button id="settings-btn" class="control-btn" aria-label="Open settings" title="Settings">
+                <span aria-hidden="true">⚙️</span>
+            </button>
+            <button id="fullscreen-viewer-btn" class="control-btn" aria-label="Toggle fullscreen" title="Fullscreen">
+                <span aria-hidden="true">📺</span>
+            </button>
         </div>
         
         <!-- Connection Lost Overlay -->
-        <div id="connection-lost" class="overlay connection-lost hidden">
+        <div id="connection-lost" class="overlay connection-lost hidden" role="alertdialog" aria-labelledby="connection-lost-title">
             <div class="message">
-                <h2>⚠️ Connection Lost</h2>
-                <p>Attempting to reconnect...</p>
-                <button id="reconnect-btn" class="primary-btn">Reconnect Now</button>
+                <h2 id="connection-lost-title">⚠️ Connection Lost</h2>
+                <p id="reconnect-status">Attempting to reconnect...</p>
+                <button id="reconnect-btn" class="primary-btn" aria-describedby="reconnect-status">
+                    <span>Reconnect Now</span>
+                </button>
             </div>
         </div>
     </div>

@@ -3,8 +3,318 @@
  * High-performance WebSocket client for VR video streaming
  */
 
+// ============================================
+// Toast Notification System
+// ============================================
+class ToastManager {
+  constructor() {
+    this.container = document.getElementById("toast-container");
+    this.toasts = [];
+  }
+
+  show(message, type = "info", duration = 3000) {
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
+
+    const icons = {
+      success: "✅",
+      error: "❌",
+      warning: "⚠️",
+      info: "ℹ️",
+    };
+
+    toast.innerHTML = `
+      <span class="toast-icon" aria-hidden="true">${
+        icons[type] || icons.info
+      }</span>
+      <span class="toast-message">${message}</span>
+      <button class="toast-close" aria-label="Close notification">&times;</button>
+    `;
+
+    // Close button handler
+    toast.querySelector(".toast-close").addEventListener("click", () => {
+      this.dismiss(toast);
+    });
+
+    this.container.appendChild(toast);
+    this.toasts.push(toast);
+
+    // Haptic feedback on mobile
+    if (navigator.vibrate && type !== "info") {
+      navigator.vibrate(type === "error" ? [50, 30, 50] : 50);
+    }
+
+    // Auto dismiss
+    setTimeout(() => this.dismiss(toast), duration);
+
+    return toast;
+  }
+
+  dismiss(toast) {
+    if (!toast.parentElement) return;
+    toast.style.animation = "toastSlideOut 0.3s ease forwards";
+    setTimeout(() => {
+      toast.remove();
+      this.toasts = this.toasts.filter((t) => t !== toast);
+    }, 300);
+  }
+
+  success(message, duration) {
+    return this.show(message, "success", duration);
+  }
+  error(message, duration) {
+    return this.show(message, "error", duration);
+  }
+  warning(message, duration) {
+    return this.show(message, "warning", duration);
+  }
+  info(message, duration) {
+    return this.show(message, "info", duration);
+  }
+}
+
+// Global toast instance
+const Toast = new ToastManager();
+
+// ============================================
+// Theme Manager
+// ============================================
+class ThemeManager {
+  constructor() {
+    this.currentTheme = this.getInitialTheme();
+    this.toggleBtn = document.getElementById("theme-toggle");
+    this.themeSelect = document.getElementById("theme-select");
+    this.init();
+  }
+
+  getInitialTheme() {
+    const saved = localStorage.getItem("vr-theme");
+    if (saved) return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  }
+
+  init() {
+    // Apply initial theme
+    this.apply(this.currentTheme);
+
+    // Toggle button handler
+    if (this.toggleBtn) {
+      this.toggleBtn.addEventListener("click", () => {
+        this.toggle();
+        // Haptic feedback
+        if (navigator.vibrate) navigator.vibrate(30);
+      });
+    }
+
+    // Settings dropdown handler
+    if (this.themeSelect) {
+      this.themeSelect.value =
+        localStorage.getItem("vr-theme-preference") || "system";
+      this.themeSelect.addEventListener("change", (e) => {
+        const preference = e.target.value;
+        localStorage.setItem("vr-theme-preference", preference);
+
+        if (preference === "system") {
+          const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
+            .matches
+            ? "dark"
+            : "light";
+          this.apply(systemTheme);
+        } else {
+          this.apply(preference);
+        }
+      });
+    }
+
+    // Listen for system theme changes
+    window
+      .matchMedia("(prefers-color-scheme: dark)")
+      .addEventListener("change", (e) => {
+        const preference = localStorage.getItem("vr-theme-preference");
+        if (!preference || preference === "system") {
+          this.apply(e.matches ? "dark" : "light");
+        }
+      });
+  }
+
+  toggle() {
+    this.currentTheme = this.currentTheme === "dark" ? "light" : "dark";
+    this.apply(this.currentTheme);
+    localStorage.setItem("vr-theme-preference", this.currentTheme);
+    if (this.themeSelect) this.themeSelect.value = this.currentTheme;
+  }
+
+  apply(theme) {
+    this.currentTheme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("vr-theme", theme);
+
+    // Update toggle button icon
+    if (this.toggleBtn) {
+      const toggle = this.toggleBtn.querySelector(".theme-toggle");
+      if (toggle) {
+        toggle.querySelector(".icon").textContent =
+          theme === "dark" ? "🌙" : "☀️";
+        toggle.querySelector(".label").textContent =
+          theme === "dark" ? "Dark" : "Light";
+      }
+    }
+
+    // Update theme-color meta tag
+    const themeColors = { dark: "#1a1a2e", light: "#f5f5f5" };
+    const metaTheme = document.getElementById("theme-color-meta");
+    if (metaTheme) metaTheme.setAttribute("content", themeColors[theme]);
+  }
+}
+
+// ============================================
+// Connection Health Monitor
+// ============================================
+class ConnectionHealthMonitor {
+  constructor() {
+    this.element = document.getElementById("connection-health");
+    this.latencyHistory = [];
+    this.maxHistory = 20;
+    this.thresholds = {
+      excellent: 30, // < 30ms
+      good: 60, // < 60ms
+      fair: 100, // < 100ms
+      poor: Infinity, // >= 100ms
+    };
+  }
+
+  update(latency) {
+    this.latencyHistory.push(latency);
+    if (this.latencyHistory.length > this.maxHistory) {
+      this.latencyHistory.shift();
+    }
+
+    const avgLatency =
+      this.latencyHistory.reduce((a, b) => a + b, 0) /
+      this.latencyHistory.length;
+    let health = "poor";
+
+    if (avgLatency < this.thresholds.excellent) health = "excellent";
+    else if (avgLatency < this.thresholds.good) health = "good";
+    else if (avgLatency < this.thresholds.fair) health = "fair";
+
+    if (this.element) {
+      this.element.className = `overlay connection-health ${health}`;
+      this.element.querySelector(".health-label").textContent =
+        health.charAt(0).toUpperCase() + health.slice(1);
+    }
+
+    return health;
+  }
+
+  reset() {
+    this.latencyHistory = [];
+    if (this.element) {
+      this.element.className = "overlay connection-health";
+      this.element.querySelector(".health-label").textContent = "Connecting...";
+    }
+  }
+}
+
+// ============================================
+// Gyroscope Manager (for VR alignment)
+// ============================================
+class GyroscopeManager {
+  constructor() {
+    this.element = document.getElementById("gyro-indicator");
+    this.icon = this.element?.querySelector(".gyro-icon");
+    this.status = this.element?.querySelector(".gyro-status");
+    this.hasPermission = false;
+    this.isActive = false;
+  }
+
+  async requestPermission() {
+    // iOS 13+ requires permission
+    if (
+      typeof DeviceOrientationEvent !== "undefined" &&
+      typeof DeviceOrientationEvent.requestPermission === "function"
+    ) {
+      try {
+        const permission = await DeviceOrientationEvent.requestPermission();
+        this.hasPermission = permission === "granted";
+      } catch (e) {
+        console.warn("Gyroscope permission denied:", e);
+        this.hasPermission = false;
+      }
+    } else {
+      // Non-iOS or older browsers
+      this.hasPermission = true;
+    }
+    return this.hasPermission;
+  }
+
+  start() {
+    if (!this.hasPermission) return;
+
+    this.isActive = true;
+    if (this.element) {
+      this.element.classList.remove("hidden");
+      this.element.classList.add("active");
+    }
+
+    window.addEventListener(
+      "deviceorientation",
+      this.handleOrientation.bind(this)
+    );
+  }
+
+  stop() {
+    this.isActive = false;
+    if (this.element) {
+      this.element.classList.add("hidden");
+      this.element.classList.remove("active");
+    }
+    window.removeEventListener(
+      "deviceorientation",
+      this.handleOrientation.bind(this)
+    );
+  }
+
+  handleOrientation(event) {
+    if (!this.isActive || !this.icon) return;
+
+    // Rotate icon based on device orientation
+    const gamma = event.gamma || 0; // Left-right tilt
+    this.icon.style.transform = `rotate(${gamma}deg)`;
+
+    // Update status based on orientation
+    const isLevel = Math.abs(gamma) < 5;
+    if (this.status) {
+      this.status.textContent = isLevel ? "Level ✓" : "Tilt to level";
+      this.status.style.color = isLevel ? "var(--success)" : "var(--warning)";
+    }
+  }
+}
+
+// ============================================
+// Haptic Feedback Utility
+// ============================================
+const Haptics = {
+  light: () => navigator.vibrate?.(10),
+  medium: () => navigator.vibrate?.(30),
+  heavy: () => navigator.vibrate?.(50),
+  success: () => navigator.vibrate?.([30, 50, 30]),
+  error: () => navigator.vibrate?.([50, 30, 50, 30, 50]),
+  warning: () => navigator.vibrate?.([30, 30, 30]),
+};
+
+// ============================================
+// Main VR Stream Viewer Class
+// ============================================
 class VRStreamViewer {
   constructor() {
+    // Initialize managers
+    this.themeManager = new ThemeManager();
+    this.healthMonitor = new ConnectionHealthMonitor();
+    this.gyroscope = new GyroscopeManager();
+
     // DOM Elements
     this.screens = {
       connection: document.getElementById("connection-screen"),
@@ -16,6 +326,7 @@ class VRStreamViewer {
       serverIp: document.getElementById("server-ip"),
       serverPort: document.getElementById("server-port"),
       connectBtn: document.getElementById("connect-btn"),
+      connectionForm: document.getElementById("connection-form"),
       connectionStatus: document.getElementById("connection-status"),
       recentList: document.getElementById("recent-list"),
       canvas: document.getElementById("vr-canvas"),
@@ -36,6 +347,7 @@ class VRStreamViewer {
 
       // Settings
       vrMode: document.getElementById("vr-mode"),
+      themeSelect: document.getElementById("theme-select"),
       qualityPreset: document.getElementById("quality-preset"),
       bufferFrames: document.getElementById("buffer-frames"),
       bufferValue: document.getElementById("buffer-value"),
@@ -84,6 +396,7 @@ class VRStreamViewer {
       bufferFrames: 1,
       showStats: true,
       hardwareDecode: true,
+      theme: "system",
     };
 
     // Frame buffer for smoother playback
@@ -111,6 +424,7 @@ class VRStreamViewer {
     this.loadRecentConnections();
     this.setupEventListeners();
     this.resizeCanvas();
+    this.setupAccessibility();
 
     // Auto-detect server IP from URL if served by PC app
     const urlParams = new URLSearchParams(window.location.search);
@@ -123,44 +437,104 @@ class VRStreamViewer {
       this.elements.serverIp.value = window.location.hostname;
     }
 
+    // Quick connect from PWA shortcut
+    if (urlParams.has("quickconnect")) {
+      const recent = this.getRecentConnections();
+      if (recent.length > 0) {
+        this.elements.serverIp.value = recent[0].ip;
+        this.elements.serverPort.value = recent[0].port;
+        setTimeout(() => this.connect(), 500);
+      }
+    }
+
     // Resize canvas on window resize
     window.addEventListener("resize", () => this.resizeCanvas());
     window.addEventListener("orientationchange", () => {
       setTimeout(() => this.resizeCanvas(), 100);
     });
+
+    // Request gyroscope permission on first interaction
+    document.addEventListener(
+      "click",
+      async () => {
+        if (!this.gyroscope.hasPermission) {
+          await this.gyroscope.requestPermission();
+        }
+      },
+      { once: true }
+    );
+  }
+
+  setupAccessibility() {
+    // Keyboard navigation for recent connections
+    document.addEventListener("keydown", (e) => {
+      // Escape key to go back
+      if (e.key === "Escape") {
+        if (this.screens.settings.classList.contains("active")) {
+          this.showConnectionScreen();
+        } else if (this.screens.viewer.classList.contains("active")) {
+          this.disconnect();
+        }
+      }
+    });
   }
 
   setupEventListeners() {
-    // Connection
-    this.elements.connectBtn.addEventListener("click", () => this.connect());
-    this.elements.serverIp.addEventListener("keypress", (e) => {
-      if (e.key === "Enter") this.connect();
+    // Connection form submission (prevents default and handles connect)
+    if (this.elements.connectionForm) {
+      this.elements.connectionForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        this.connect();
+      });
+    }
+
+    // Connection button with haptic feedback
+    this.elements.connectBtn.addEventListener("click", (e) => {
+      // Only handle if not a form submit
+      if (!this.elements.connectionForm) {
+        Haptics.medium();
+        this.connect();
+      }
     });
 
-    // Viewer controls
-    this.elements.disconnectBtn.addEventListener("click", () =>
-      this.disconnect()
-    );
-    this.elements.settingsBtn.addEventListener("click", () =>
-      this.showSettings()
-    );
-    this.elements.fullscreenViewerBtn.addEventListener("click", () =>
-      this.toggleFullscreen()
-    );
-    this.elements.reconnectBtn.addEventListener("click", () =>
-      this.reconnect()
-    );
+    this.elements.serverIp.addEventListener("keypress", (e) => {
+      if (e.key === "Enter" && !this.elements.connectionForm) {
+        this.connect();
+      }
+    });
 
-    // Settings
+    // Viewer controls with haptic feedback
+    this.elements.disconnectBtn.addEventListener("click", () => {
+      Haptics.medium();
+      this.disconnect();
+    });
+    this.elements.settingsBtn.addEventListener("click", () => {
+      Haptics.light();
+      this.showSettings();
+    });
+    this.elements.fullscreenViewerBtn.addEventListener("click", () => {
+      Haptics.light();
+      this.toggleFullscreen();
+    });
+    this.elements.reconnectBtn.addEventListener("click", () => {
+      Haptics.medium();
+      this.reconnect();
+    });
+
+    // Settings with haptic feedback
     this.elements.vrMode.addEventListener("change", (e) => {
+      Haptics.light();
       this.settings.vrMode = e.target.value;
       this.saveSettings();
+      Toast.success("VR mode updated");
     });
 
     this.elements.qualityPreset.addEventListener("change", (e) => {
+      Haptics.light();
       this.settings.qualityPreset = e.target.value;
       this.sendQualityRequest();
       this.saveSettings();
+      Toast.success("Quality preset updated");
     });
 
     this.elements.bufferFrames.addEventListener("input", (e) => {
@@ -247,12 +621,16 @@ class VRStreamViewer {
 
     if (!ip) {
       this.showStatus("Please enter the PC IP address", "error");
+      Toast.warning("Please enter a valid IP address");
+      Haptics.warning();
       return;
     }
 
     const url = `ws://${ip}:${port}`;
     this.showStatus("Connecting...", "connecting");
     this.elements.connectBtn.disabled = true;
+    this.elements.connectBtn.classList.add("btn-loading");
+    this.healthMonitor.reset();
 
     try {
       this.ws = new WebSocket(url);
@@ -264,9 +642,17 @@ class VRStreamViewer {
         this.saveRecentConnection(ip, port);
         this.reconnectAttempts = 0;
 
+        Toast.success(`Connected to ${ip}`);
+        Haptics.success();
+        this.elements.connectBtn.classList.remove("btn-loading");
+
         setTimeout(() => {
           this.showViewer();
           this.requestWakeLock();
+          // Start gyroscope for VR alignment
+          if (this.gyroscope.hasPermission) {
+            this.gyroscope.start();
+          }
         }, 500);
       };
 
@@ -276,6 +662,9 @@ class VRStreamViewer {
         console.error("WebSocket error:", error);
         this.showStatus("Connection failed", "error");
         this.elements.connectBtn.disabled = false;
+        this.elements.connectBtn.classList.remove("btn-loading");
+        Toast.error("Connection failed - check IP address");
+        Haptics.error();
       };
 
       this.ws.onclose = () => {
@@ -284,11 +673,15 @@ class VRStreamViewer {
           this.handleDisconnect();
         }
         this.elements.connectBtn.disabled = false;
+        this.elements.connectBtn.classList.remove("btn-loading");
       };
     } catch (error) {
       console.error("Connection error:", error);
       this.showStatus("Invalid address", "error");
       this.elements.connectBtn.disabled = false;
+      this.elements.connectBtn.classList.remove("btn-loading");
+      Toast.error("Invalid address format");
+      Haptics.error();
     }
   }
 
@@ -297,22 +690,32 @@ class VRStreamViewer {
       this.ws.close();
       this.ws = null;
     }
+    this.gyroscope.stop();
     this.showConnectionScreen();
     this.releaseWakeLock();
+    Toast.info("Disconnected");
   }
 
   handleDisconnect() {
     this.elements.connectionLost.classList.remove("hidden");
+    Toast.warning("Connection lost - attempting to reconnect...");
+    Haptics.warning();
+    this.gyroscope.stop();
 
     // Auto-reconnect
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       setTimeout(() => this.reconnect(), this.reconnectDelay);
+    } else {
+      Toast.error("Failed to reconnect after multiple attempts");
     }
   }
 
   reconnect() {
     this.reconnectAttempts++;
     this.elements.connectionLost.classList.add("hidden");
+    Toast.info(
+      `Reconnecting... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`
+    );
     this.connect();
   }
 
@@ -545,6 +948,9 @@ class VRStreamViewer {
       1
     );
     this.elements.statFrames.textContent = this.stats.totalFrames;
+
+    // Update connection health indicator
+    this.healthMonitor.update(this.stats.latency);
   }
 
   showStatus(message, type = "") {
@@ -597,7 +1003,7 @@ class VRStreamViewer {
       recent = recent.filter((conn) => conn.ip !== ip);
 
       // Add to front
-      recent.unshift({ ip, port });
+      recent.unshift({ ip, port, lastUsed: Date.now() });
 
       // Keep only last 5
       recent = recent.slice(0, 5);
@@ -606,6 +1012,14 @@ class VRStreamViewer {
       this.loadRecentConnections();
     } catch (e) {
       console.error("Error saving recent connection:", e);
+    }
+  }
+
+  getRecentConnections() {
+    try {
+      return JSON.parse(localStorage.getItem("vr_recent_connections") || "[]");
+    } catch (e) {
+      return [];
     }
   }
 

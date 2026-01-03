@@ -1,0 +1,97 @@
+{
+  "name": "VR Screen Viewer",
+  "short_name": "VR Viewer",
+  "description": "Stream your PC screen to your phone in VR - High-performance WebSocket streaming for virtual reality viewing",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "categories": ["entertainment", "utilities"],
+  "lang": "en",
+  "dir": "ltr",
+  "scope": "./",
+  "icons": [
+    {
+      "src": "icons/icon-72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshots/connection-screen.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "label": "Connection screen"
+    },
+    {
+      "src": "screenshots/vr-viewer.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "label": "VR viewing mode"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Quick Connect",
+      "short_name": "Connect",
+      "description": "Connect to your last used PC",
+      "url": "./index.html?quickconnect=true",
+      "icons": [{ "src": "icons/icon-96.png", "sizes": "96x96" }]
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false,
+  "features": [
+    "Cross-platform",
+    "Offline capable",
+    "VR streaming"
+  ],
+  "edge_side_panel": {
+    "preferred_width": 400
+  }
+}
