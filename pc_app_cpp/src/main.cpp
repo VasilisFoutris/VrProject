@@ -6,6 +6,7 @@
 #include "vr_streamer.hpp"
 #include <iostream>
 #include <csignal>
+#include <cstdio>
 #include <conio.h>
 
 using namespace vrs;
@@ -74,6 +75,10 @@ Controls (during streaming):
 
 int main(int argc, char *argv[])
 {
+    // Disable stdout buffering for immediate output when piped to GUI
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    
     print_banner();
 
     // Parse command line arguments

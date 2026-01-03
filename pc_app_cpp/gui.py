@@ -282,19 +282,15 @@ class CppBackendProcess(QThread):
             
             self.process_started.emit()
             
-            # Read output as bytes and decode with error handling
-            # Use a buffer to accumulate partial lines
-            buffer = b''
+            # Read output line by line for reliable parsing
+            # Use readline() which is more reliable for line-based output
             while self._running and self.process.poll() is None:
-                # Read available data
-                chunk = self.process.stdout.read(1024)
-                if chunk:
-                    buffer += chunk
-                    # Process complete lines
-                    while b'\n' in buffer:
-                        line_bytes, buffer = buffer.split(b'\n', 1)
-                        # Also handle carriage returns
-                        line_bytes = line_bytes.replace(b'\r', b'')
+                try:
+                    # Use readline for proper line buffering
+                    line_bytes = self.process.stdout.readline()
+                    if line_bytes:
+                        # Handle carriage returns
+                        line_bytes = line_bytes.replace(b'\r', b'').replace(b'\n', b'')
                         if line_bytes:
                             try:
                                 line = line_bytes.decode('utf-8', errors='replace').strip()
@@ -304,8 +300,11 @@ class CppBackendProcess(QThread):
                             if line:
                                 self.output_received.emit(line)
                                 self._parse_stats(line)
-                else:
-                    time.sleep(0.01)  # Small sleep to avoid busy-waiting
+                    else:
+                        time.sleep(0.01)  # Small sleep when no data
+                except Exception as e:
+                    self.error_occurred.emit(f"Read error: {e}")
+                    break
                     
         except Exception as e:
             self.error_occurred.emit(str(e))
@@ -494,11 +493,15 @@ class MainWindow(QMainWindow):
         # Source list (monitors + windows)
         self.source_list = QListWidget()
         self.source_list.setMinimumHeight(200)
+        # Connect multiple signals to catch all selection methods
         self.source_list.itemClicked.connect(self.on_source_selected)
+        self.source_list.itemDoubleClicked.connect(self.on_source_selected)
+        self.source_list.currentItemChanged.connect(self.on_source_current_changed)
+        self.source_list.itemSelectionChanged.connect(self.on_item_selection_changed)
         source_layout.addWidget(self.source_list)
         
         # Currently selected
-        self.selected_label = QLabel("Selected: None")
+        self.selected_label = QLabel("Selected: Monitor 1 (default)")
         self.selected_label.setStyleSheet("font-weight: bold;")
         source_layout.addWidget(self.selected_label)
         
@@ -720,6 +723,13 @@ class MainWindow(QMainWindow):
     
     def refresh_sources(self):
         """Refresh the list of capture sources (monitors and windows)"""
+        # Remember current selection
+        current_hwnd = self.window_hwnd
+        current_mode = self.capture_mode
+        current_monitor = self.monitor
+        
+        # Block signals temporarily to avoid spurious callbacks during refresh
+        self.source_list.blockSignals(True)
         self.source_list.clear()
         
         # Get monitors (individual only, no "All Monitors")
@@ -731,11 +741,25 @@ class MainWindow(QMainWindow):
         header_item.setForeground(QBrush(QColor(128, 128, 128)))
         self.source_list.addItem(header_item)
         
+        # Track if we restored selection
+        selection_restored = False
+        first_monitor_item = None
+        
         # Add monitors
         for mon in self.monitors:
             item = QListWidgetItem(f"📺 {mon['name']}")
             item.setData(Qt.UserRole, ('monitor', mon['index']))
             self.source_list.addItem(item)
+            
+            # Track first monitor for default selection
+            if first_monitor_item is None:
+                first_monitor_item = item
+            
+            # Re-select if this was the previously selected monitor
+            if current_mode == 'monitor' and current_monitor == mon['index']:
+                item.setSelected(True)
+                self.source_list.setCurrentItem(item)
+                selection_restored = True
         
         # Get windows
         self.windows = WindowEnumerator.enumerate_windows()
@@ -754,6 +778,28 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, ('window', win.hwnd))
             item.setToolTip(win.title)  # Full title on hover
             self.source_list.addItem(item)
+            # Re-select if this was the previously selected window
+            if current_mode == 'window' and current_hwnd == win.hwnd:
+                item.setSelected(True)
+                self.source_list.setCurrentItem(item)
+                selection_restored = True
+        
+        # If no selection was restored and we have monitors, select the first one
+        if not selection_restored and first_monitor_item is not None:
+            first_monitor_item.setSelected(True)
+            self.source_list.setCurrentItem(first_monitor_item)
+            # Also update the internal state
+            data = first_monitor_item.data(Qt.UserRole)
+            if data:
+                self.capture_mode = 'monitor'
+                self.monitor = data[1]
+                self.window_hwnd = None
+                mon = next((m for m in self.monitors if m['index'] == self.monitor), None)
+                if mon:
+                    self.selected_label.setText(f"Selected: {mon['name']}")
+        
+        # Re-enable signals
+        self.source_list.blockSignals(False)
     
     def on_source_selected(self, item: QListWidgetItem):
         """Handle source selection"""
@@ -781,6 +827,17 @@ class MainWindow(QMainWindow):
                 self.selected_label.setText(f"Selected: {title}")
             else:
                 self.selected_label.setText(f"Selected: Window {source_id}")
+    
+    def on_source_current_changed(self, current: QListWidgetItem, previous: QListWidgetItem):
+        """Handle selection change via keyboard or other means"""
+        if current is not None:
+            self.on_source_selected(current)
+    
+    def on_item_selection_changed(self):
+        """Handle when the selection changes"""
+        selected_items = self.source_list.selectedItems()
+        if selected_items:
+            self.on_source_selected(selected_items[0])
                 
     def on_preset_changed(self, preset: str):
         self.preset = preset
@@ -832,6 +889,20 @@ class MainWindow(QMainWindow):
         if not os.path.exists(self.exe_path):
             QMessageBox.critical(self, "Error", f"C++ backend not found!\n{self.exe_path}\n\nRun build.bat first.")
             return
+        
+        # Double-check current selection from list widget (safety check)
+        current_item = self.source_list.currentItem()
+        if current_item is not None:
+            data = current_item.data(Qt.UserRole)
+            if data is not None:
+                source_type, source_id = data
+                if source_type == 'window':
+                    self.capture_mode = 'window'
+                    self.window_hwnd = source_id
+                else:
+                    self.capture_mode = 'monitor'
+                    self.monitor = source_id
+                    self.window_hwnd = None
             
         # Build args
         args = [
@@ -846,9 +917,15 @@ class MainWindow(QMainWindow):
         if self.capture_mode == 'window' and self.window_hwnd:
             # Window capture via handle
             args.extend(['--hwnd', str(self.window_hwnd)])
+            capture_desc = f"window HWND={self.window_hwnd}"
         else:
             # Monitor capture - subtract 1 since mss uses 1-indexed but C++ uses 0-indexed
             args.extend(['-m', str(self.monitor - 1)])
+            capture_desc = f"monitor {self.monitor}"
+        
+        # Log to UI
+        self.log_text.append(f"Starting stream with capture: {capture_desc}")
+        self.log_text.append(f"Command args: {' '.join(args)}")
         
         if not self.vr_enabled:
             args.append('--no-vr')
